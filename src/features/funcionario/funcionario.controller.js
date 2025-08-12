@@ -93,6 +93,20 @@ const exportAll = async (req, res) => {
     }
 };
 
+const importFile = async (req, res) => { // Renomeado para ser genérico
+  try {
+    if (!req.file) {
+      return res.status(400).send({ message: 'Nenhum arquivo enviado.' });
+    }
+    // CHAMA A NOVA FUNÇÃO DE IMPORTAÇÃO XLSX
+    const result = await funcionarioService.importFromXLSX(req.file.path);
+    res.status(200).send(result);
+  } catch (error) {
+    console.error('Erro no controller ao importar arquivo:', error);
+    res.status(500).send({ message: 'Falha ao processar o arquivo.', error: error.message });
+  }
+};
+
 module.exports = {
   importCSV,
   create,
@@ -100,5 +114,6 @@ module.exports = {
   findOne,
   update,
   remove,
-  exportAll
+  exportAll,
+  importFile
 };

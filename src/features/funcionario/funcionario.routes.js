@@ -35,5 +35,6 @@ router.put('/:matricula', funcionarioController.update);
 router.delete('/:matricula', funcionarioController.remove);
 router.post('/:matricula/afastamentos', afastamentoController.create);
 
+router.post('/import', upload.single('file'), funcionarioController.importFile);
 
 module.exports = router;
