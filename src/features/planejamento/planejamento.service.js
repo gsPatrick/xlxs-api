@@ -1,25 +1,62 @@
-// src/features/planejamento/planejamento.controller.js
-const planejamentoService = require('./planejamento.service');
+// src/features/planejamento/planejamento.service.js
 
-const findAll = async (req, res) => {
+const { Planejamento } = require('../../models');
+const db = require('../../models'); // Usado para transações do Sequelize
+
+/**
+ * Busca o histórico de planejamentos, com filtro opcional por ano.
+ * @param {object} queryParams - Parâmetros da query, como { ano: 2024 }.
+ * @returns {Promise<Array<object>>} A lista de planejamentos.
+ */
+const findAll = async (queryParams) => {
+    const whereClause = {};
+    if (queryParams.ano) {
+        whereClause.ano = parseInt(queryParams.ano, 10);
+    }
+    return Planejamento.findAll({
+        where: whereClause,
+        order: [['criado_em', 'DESC']]
+    });
+};
+
+/**
+ * Ativa (restaura) um planejamento arquivado.
+ * @param {number} id - O ID do planejamento a ser restaurado.
+ * @returns {Promise<object>} O objeto do planejamento ativado.
+ */
+const ativar = async (id) => {
+    const planejamentoParaAtivar = await Planejamento.findByPk(id);
+    if (!planejamentoParaAtivar) {
+        throw new Error("Planejamento não encontrado.");
+    }
+    if (planejamentoParaAtivar.status === 'ativo') {
+        return planejamentoParaAtivar; // Já está ativo, não faz nada.
+    }
+
+    // Usa uma transação para garantir a integridade da operação
+    const t = await db.sequelize.transaction();
     try {
-        const planejamentos = await planejamentoService.findAll(req.query);
-        res.status(200).send(planejamentos);
+        // 1. Arquiva qualquer outro planejamento que esteja ativo para o mesmo ano.
+        await Planejamento.update(
+            { status: 'arquivado' },
+            { where: { ano: planejamentoParaAtivar.ano, status: 'ativo' }, transaction: t }
+        );
+
+        // 2. Ativa o planejamento escolhido.
+        planejamentoParaAtivar.status = 'ativo';
+        await planejamentoParaAtivar.save({ transaction: t });
+
+        // Confirma a transação
+        await t.commit();
+        return planejamentoParaAtivar;
     } catch (error) {
-        console.error("Erro no controller ao buscar planejamentos:", error);
-        res.status(500).send({ message: 'Falha ao buscar planejamentos.', error: error.message });
+        // Desfaz tudo em caso de erro
+        await t.rollback();
+        throw error;
     }
 };
 
-const ativar = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const planejamentoAtivado = await planejamentoService.ativar(id);
-        res.status(200).send({ message: 'Planejamento restaurado com sucesso.', planejamento: planejamentoAtivado });
-    } catch (error) {
-        console.error("Erro no controller ao ativar planejamento:", error);
-        res.status(500).send({ message: 'Falha ao restaurar planejamento.', error: error.message });
-    }
+module.exports = {
+    findAll,
+    ativar
 };
-
-module.exports = { findAll, ativar };
