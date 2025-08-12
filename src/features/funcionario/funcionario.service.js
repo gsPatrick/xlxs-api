@@ -2,7 +2,7 @@
 
 const { Op } = require('sequelize');
 const { Funcionario, Ferias, Afastamento } = require('../../models');
-const { parse, addDays } = require('date-fns');
+const { addYears, addMonths, addDays, differenceInDays } = require('date-fns');
 const csv = require('csv-parser');
 const fs = require('fs');
 const XLSX = require('xlsx');
