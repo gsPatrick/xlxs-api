@@ -2,7 +2,8 @@
 
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/sequelize-instance');
-const Planejamento = require('./planejamento.model');
+// REMOVA a importação de Planejamento, pois o relacionamento será definido no index.js
+// const Planejamento = require('./planejamento.model');
 
 const Ferias = sequelize.define('Ferias', {
   id: {
@@ -48,8 +49,8 @@ const Ferias = sequelize.define('Ferias', {
   comment: 'Armazena os períodos de férias agendados ou gozados.'
 });
 
-// O relacionamento com Planejamento é mantido para o histórico de distribuições automáticas.
-Planejamento.hasMany(Ferias, { foreignKey: 'planejamentoId', as: 'itensDeFerias' });
-Ferias.belongsTo(Planejamento, { foreignKey: 'planejamentoId' });
+// REMOVA ESTAS LINHAS DE ASSOCIAÇÃO DAQUI
+// Planejamento.hasMany(Ferias, { foreignKey: 'planejamentoId', as: 'itensDeFerias' });
+// Ferias.belongsTo(Planejamento, { foreignKey: 'planejamentoId' });
 
 module.exports = Ferias;
