@@ -7,6 +7,30 @@ const csv = require('csv-parser');
 const fs = require('fs');
 const XLSX = require('xlsx');
 
+
+const columnMapping = {
+    'Matrícula': 'matricula',
+    'Nome Funcionário': 'nome_funcionario',
+    'Dth. Admissão': 'dth_admissao',
+    'Categoria_Trabalhador': 'categoria_trabalhador',
+    'Municipio_Local_Trabalho': 'municipio_local_trabalho',
+    'DiasAfastado': 'dias_afastado',
+    'Dth. Última Férias': 'dth_ultima_ferias',
+    'Dth. Último Planejamento': 'dth_ultimo_planejamento',
+    'Dth. Limite Férias': 'dth_limite_ferias',
+    'Dth. Início Período': 'dth_inicio_periodo',
+    'Dth. Final Período': 'dth_final_periodo',
+    'Qtd. Dias Férias': 'qtd_dias_ferias',
+    'Razão Social Filial': 'razao_social_filial',
+    'Código Filial': 'codigo_filial',
+    'Categoria': 'categoria',
+    'Contrato': 'contrato',
+    'Local De Trabalho': 'local_de_trabalho',
+    'Horário': 'horario',
+    'Afastamento': 'afastamento',
+    'Convenção': 'convencao',
+};
+
 // Lógica de importação de CSV (mantida e ajustada)
 const importFromCSV = async (filePath) => {
   // ... (a lógica de importação que já tínhamos) ...
@@ -108,69 +132,68 @@ const remove = async (matricula) => {
 };
 
 
-/**
- * Processa um arquivo XLSX e popula/atualiza a tabela de funcionários.
- * @param {string} filePath - O caminho do arquivo .xlsx enviado.
- */
 const importFromXLSX = async (filePath) => {
     return new Promise(async (resolve, reject) => {
         try {
-            // 1. Ler o arquivo do caminho temporário
             const workbook = XLSX.readFile(filePath);
-
-            // 2. Pegar o nome da primeira planilha
             const sheetName = workbook.SheetNames[0];
             const worksheet = workbook.Sheets[sheetName];
 
-            // 3. Converter a planilha para um array de objetos JSON
-            // raw: false garante que as datas sejam interpretadas corretamente
-            const data = XLSX.utils.sheet_to_json(worksheet, { raw: false });
-
+            // --- AQUI ESTÁ A CORREÇÃO ---
+            // A opção 'range: 1' instrui a biblioteca a ignorar a primeira linha (índice 0)
+            // e começar a ler a partir da segunda linha (índice 1), que contém seus cabeçalhos.
+            const data = XLSX.utils.sheet_to_json(worksheet, { range: 1, raw: false });
+            
+            // O resto da lógica permanece o mesmo
             const funcionariosParaCriar = data.map(row => {
                 const funcionario = {};
                 for (const key in row) {
-                    // Opcional: Remover espaços extras dos cabeçalhos, se necessário
                     const trimmedKey = key.trim(); 
                     if (columnMapping[trimmedKey]) {
                         let value = row[key];
-                        // O leitor XLSX já pode converter datas, mas podemos garantir o formato
                         if (trimmedKey.startsWith('Dth.') && value) {
-                            // A biblioteca lê datas no formato de data do Excel, que precisam ser convertidas
-                            // Se a data já vier como string 'DD/MM/AAAA', o código abaixo funciona.
-                            // Se vier como número serial do Excel, XLSX.SSF.parse_date_code(value) seria necessário.
-                            // Vamos assumir que a conversão para string de data já ocorreu.
+                            // Tenta converter a data, robusto para diferentes formatos
                             const parts = String(value).split('/');
                             if(parts.length === 3) {
+                                // Formato DD/MM/AAAA
                                 value = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
                             } else {
-                                value = new Date(value); // Tenta parsear a data diretamente
+                                // Tenta um parse genérico
+                                const parsedDate = new Date(value);
+                                if (!isNaN(parsedDate)) {
+                                    value = parsedDate;
+                                } else {
+                                    value = null; // Data inválida
+                                }
                             }
                         }
                         funcionario[columnMapping[trimmedKey]] = value || null;
                     }
                 }
                 return funcionario;
-            }).filter(f => f.matricula); // Garante que apenas linhas com matrícula sejam processadas
+            }).filter(f => f.matricula);
 
             if (funcionariosParaCriar.length === 0) {
-                fs.unlinkSync(filePath); // Limpa o arquivo temporário
-                return reject(new Error("Nenhum registro válido encontrado na planilha. Verifique o cabeçalho das colunas."));
+                fs.unlinkSync(filePath);
+                return reject(new Error("Nenhum registro válido encontrado. Verifique se os nomes das colunas na linha 2 da planilha correspondem ao padrão."));
             }
 
-            // 4. Usar 'bulkCreate' para inserir ou atualizar os registros no banco
             await Funcionario.bulkCreate(funcionariosParaCriar, {
                 updateOnDuplicate: Object.values(columnMapping).filter(field => field !== 'matricula')
             });
 
-            fs.unlinkSync(filePath); // Limpa o arquivo temporário
+            fs.unlinkSync(filePath);
             resolve({ message: `${funcionariosParaCriar.length} registros processados com sucesso do arquivo XLSX.` });
 
         } catch (error) {
-            fs.unlinkSync(filePath); // Garante a limpeza em caso de erro
-            reject(error);
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+            console.error("Erro detalhado no serviço de importação:", error);
+            reject(new Error("Ocorreu um erro interno ao processar a planilha."));
         }
     });
-}
+};
 
 module.exports = {
   importFromCSV,
