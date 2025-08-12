@@ -258,7 +258,6 @@ const importFromXLSX = async (filePath) => {
 };
 
 module.exports = {
-  importFromCSV,
   exportAllToXLSX,
   create,
   findAll,
