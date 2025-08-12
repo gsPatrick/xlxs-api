@@ -238,6 +238,9 @@ const restaurarPlanejamento = async (planejamentoId) => {
         throw error;
     }
 
+
+};
+
     async function findAll(queryParams) {
     const whereClause = {};
     if (queryParams.planejamento === 'ativo') {
@@ -254,8 +257,6 @@ const restaurarPlanejamento = async (planejamentoId) => {
         order: [['data_inicio', 'ASC']]
     });
 }
-
-};
 
 module.exports = {
   // Função principal de regras de negócio
