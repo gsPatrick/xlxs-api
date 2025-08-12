@@ -1,18 +1,5 @@
 const feriasService = require('./ferias.service');
 
-const distribuir = async (req, res) => {
-  try {
-    const { ano } = req.body;
-    if (!ano || isNaN(parseInt(ano))) {
-      return res.status(400).send({ message: 'O ano de referência é obrigatório.' });
-    }
-    const resultado = await feriasService.distribuirFerias(parseInt(ano));
-    res.status(200).send(resultado);
-  } catch (error) {
-    console.error('Erro ao distribuir férias:', error);
-    res.status(500).send({ message: 'Falha ao distribuir férias.', error: error.message });
-  }
-};
 
 const listar = async (req, res) => {
   try {
@@ -50,4 +37,23 @@ const exportar = async (req, res) => {
     }
 };
 
-module.exports = { distribuir, listar, atualizar, exportar };
+const findAll = async (req, res) => {
+    try {
+        const ferias = await feriasService.findAll(req.query);
+        res.status(200).send(ferias);
+    } catch (error) {
+        res.status(500).send({ message: 'Falha ao buscar férias.', error: error.message });
+    }
+};
+
+const distribuir = async (req, res) => {
+    try {
+        const { ano, descricao } = req.body;
+        const resultado = await feriasService.distribuirFerias(ano, descricao);
+        res.status(200).send(resultado);
+    } catch (error) {
+        res.status(500).send({ message: 'Falha ao distribuir férias.', error: error.message });
+    }
+};
+
+module.exports = { distribuir, findAll ,listar, atualizar, exportar };

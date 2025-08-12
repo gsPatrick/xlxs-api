@@ -88,45 +88,101 @@ async function recalcularPeriodoAquisitivo(matricula) {
 
 // --- LÓGICA DE DISTRIBUIÇÃO AUTOMÁTICA ---
 
-const distribuirFerias = async (ano, descricao) => {
-  await Planejamento.update({ status: 'arquivado' }, { where: { ano: ano, status: 'ativo' } });
-  const novoPlanejamento = await Planejamento.create({ ano, descricao: descricao || `Planejamento gerado em ${new Date().toLocaleDateString()}`, status: 'ativo' });
-  
-  const funcionarios = await Funcionario.findAll({
-    where: { status: 'Ativo', afastamento: { [Op.not]: 'Aviso Prévio' } },
-    order: [['dth_limite_ferias', 'ASC']]
-  });
+async function distribuirFerias(ano, descricao) {
+    console.log(`Iniciando distribuição de férias para o ano ${ano}...`);
 
-  const feriasParaCriar = [];
-  for (const func of funcionarios) {
-    // A lógica de distribuição usará os dados já calculados e atualizados do funcionário
-    // (saldo_dias_ferias, dth_limite_ferias, etc)
-    const diasDeFerias = func.saldo_dias_ferias;
-    if (diasDeFerias <= 0) continue;
+    // 1. Arquiva planejamentos ativos anteriores para o mesmo ano.
+    await Planejamento.update({ status: 'arquivado' }, { where: { ano, status: 'ativo' } });
     
-    // ... (lógica de encontrar data válida, como já tínhamos) ...
-    // Placeholder para a lógica de encontrar data:
-    const dataInicio = new Date(`${ano}-03-01`); // Simulação
-    const dataFim = addDays(dataInicio, diasDeFerias - 1);
-
-    feriasParaCriar.push({
-      matricula_funcionario: func.matricula,
-      data_inicio: format(dataInicio, 'yyyy-MM-dd'),
-      data_fim: format(dataFim, 'yyyy-MM-dd'),
-      qtd_dias: diasDeFerias,
-      planejamentoId: novoPlanejamento.id,
-      periodo_aquisitivo_inicio: func.periodo_aquisitivo_atual_inicio,
-      periodo_aquisitivo_fim: func.periodo_aquisitivo_atual_fim,
-      status: 'Planejada'
+    // 2. Cria um novo registro de Planejamento.
+    const novoPlanejamento = await Planejamento.create({
+        ano,
+        descricao: descricao || `Distribuição automática para ${ano}`,
+        status: 'ativo'
     });
-  }
 
-  if (feriasParaCriar.length > 0) {
-    await Ferias.bulkCreate(feriasParaCriar);
-  }
+    // 3. Busca todos os funcionários elegíveis para o planejamento.
+    // Regra 4.3: Não incluir colaboradores com "Aviso Prévio"
+    const funcionariosElegiveis = await Funcionario.findAll({
+        where: {
+            status: 'Ativo',
+            dth_limite_ferias: { [Op.not]: null },
+            afastamento: { [Op.notIn]: ['Aviso Prévio', 'AVISO PREVIO'] } // Garante a exclusão
+        },
+        // Regra 1: Prioriza quem tem a DATA LIMITE mais próxima, para evitar pagamento em dobro.
+        order: [['dth_limite_ferias', 'ASC']]
+    });
 
-  return { message: `Novo planejamento criado para o ano ${ano}.`, registros: feriasParaCriar.length };
-};
+    console.log(`${funcionariosElegiveis.length} funcionários elegíveis encontrados.`);
+    
+    // Simulação de feriados. Em um sistema real, isso viria de um DB ou API.
+    const feriadosDoAno = [`${ano}-01-01`, `${ano}-04-21`, `${ano}-05-01`, `${ano}-09-07`, `${ano}-10-12`, `${ano}-11-02`, `${ano}-11-15`, `${ano}-12-25`];
+    const feriasParaCriar = [];
+    const calendarioOcupacao = {}; // Lógica para controle de cobertura (simplificado)
+
+    for (const funcionario of funcionariosElegiveis) {
+        // Regra 3: O saldo de dias já foi ajustado por faltas no recálculo.
+        const diasDeFerias = funcionario.saldo_dias_ferias;
+        if (diasDeFerias <= 0) {
+            console.log(`Funcionário ${funcionario.matricula} sem saldo de férias.`);
+            continue;
+        }
+
+        let dataInicioEncontrada = false;
+        // Inicia a busca pela data de início do período concessivo do funcionário.
+        let dataAtual = new Date(funcionario.periodo_aquisitivo_atual_inicio);
+        const dataLimite = new Date(funcionario.dth_limite_ferias);
+
+        // Loop para encontrar a primeira data válida para as férias
+        while (!dataInicioEncontrada && dataAtual < dataLimite) {
+            if (isDataValidaInicio(dataAtual, funcionario, feriadosDoAno)) {
+                // Lógica de Cobertura (Regra 5)
+                // Simplificação: não agendar mais de X pessoas do mesmo município no mesmo mês.
+                const mes = dataAtual.getMonth();
+                const municipio = funcionario.municipio_local_trabalho;
+                const chaveOcupacao = `${municipio}-${mes}`;
+                
+                if (!calendarioOcupacao[chaveOcupacao]) {
+                    calendarioOcupacao[chaveOcupacao] = 0;
+                }
+
+                // Limite de 5 funcionários por município/mês (exemplo)
+                if (calendarioOcupacao[chaveOcupacao] < 5) {
+                    const dataFim = addDays(dataAtual, diasDeFerias - 1);
+
+                    feriasParaCriar.push({
+                        matricula_funcionario: funcionario.matricula,
+                        planejamentoId: novoPlanejamento.id,
+                        data_inicio: format(dataAtual, 'yyyy-MM-dd'),
+                        data_fim: format(dataFim, 'yyyy-MM-dd'),
+                        qtd_dias: diasDeFerias,
+                        periodo_aquisitivo_inicio: funcionario.periodo_aquisitivo_atual_inicio,
+                        periodo_aquisitivo_fim: funcionario.periodo_aquisitivo_atual_fim,
+                        status: 'Planejada'
+                    });
+
+                    calendarioOcupacao[chaveOcupacao]++;
+                    dataInicioEncontrada = true;
+                    console.log(`Férias alocadas para ${funcionario.matricula} a partir de ${format(dataAtual, 'dd/MM/yyyy')}.`);
+                }
+            }
+            // Avança para o próximo dia
+            dataAtual = addDays(dataAtual, 1);
+        }
+
+        if (!dataInicioEncontrada) {
+            console.warn(`AVISO: Não foi possível alocar férias para o funcionário ${funcionario.matricula} antes da data limite.`);
+        }
+    }
+
+    // 4. Salva todos os agendamentos de férias gerados no banco de dados.
+    if (feriasParaCriar.length > 0) {
+        await Ferias.bulkCreate(feriasParaCriar);
+        console.log(`${feriasParaCriar.length} registros de férias foram criados.`);
+    }
+
+    return { message: `Distribuição para ${ano} concluída. ${feriasParaCriar.length} períodos de férias foram planejados.` };
+}
 
 
 // --- CRUD E OUTRAS FUNCIONALIDADES DE FÉRIAS ---
@@ -181,6 +237,24 @@ const restaurarPlanejamento = async (planejamentoId) => {
         await t.rollback();
         throw error;
     }
+
+    async function findAll(queryParams) {
+    const whereClause = {};
+    if (queryParams.planejamento === 'ativo') {
+        whereClause['$Planejamento.status$'] = 'ativo';
+    }
+    // Adicionar outros filtros aqui no futuro
+
+    return Ferias.findAll({
+        where: whereClause,
+        include: [
+            { model: Funcionario, required: true },
+            { model: Planejamento, required: true }
+        ],
+        order: [['data_inicio', 'ASC']]
+    });
+}
+
 };
 
 module.exports = {
@@ -197,4 +271,5 @@ module.exports = {
   listarFerias,
   atualizarFeria,
   removeFeria,
+  findAll
 };
