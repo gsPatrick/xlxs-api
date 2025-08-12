@@ -10,6 +10,7 @@ const afastamentoRoutes = require('../features/afastamento/afastamento.routes');
 const feriasRoutes = require('../features/ferias/ferias.routes');
 // const relatoriosRoutes = require('../features/relatorios/relatorios.routes'); // Descomente quando criar este módulo
 const dashboardRoutes = require('../features/dashboard/dashboard.routes'); // NOVO
+const relatoriosRoutes = require('../features/relatorios/relatorios.routes'); // NOVO
 
 const router = express.Router();
 
@@ -41,6 +42,7 @@ router.use('/afastamentos', afastamentoRoutes);
 router.use('/ferias', feriasRoutes);
 // router.use('/relatorios', relatoriosRoutes); // Descomente quando criar este módulo
 router.use('/dashboard', dashboardRoutes); // NOVO
+router.use('/relatorios', relatoriosRoutes); // NOVO
 
 
 // Rota de teste para verificar se a proteção está funcionando
