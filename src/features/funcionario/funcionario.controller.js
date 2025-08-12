@@ -3,18 +3,7 @@
 const funcionarioService = require('./funcionario.service');
 
 // Importa uma planilha CSV
-const importCSV = async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).send({ message: 'Nenhum arquivo enviado.' });
-    }
-    const result = await funcionarioService.importFromCSV(req.file.path);
-    res.status(200).send(result);
-  } catch (error) {
-    console.error('Erro no controller ao importar CSV:', error);
-    res.status(500).send({ message: 'Falha ao processar o arquivo CSV.', error: error.message });
-  }
-};
+
 
 // Adiciona um novo funcionário
 const create = async (req, res) => {
