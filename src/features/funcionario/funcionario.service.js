@@ -1,10 +1,10 @@
-// src/features/funcionario/funcionario.service.js
-
-const { Funcionario } = require('../../models');
+const { Op } = require('sequelize');
+const { Funcionario, Ferias, Afastamento } = require('../../models');
+const cache = require('../../utils/cache');
 const fs = require('fs');
 const XLSX = require('xlsx');
 const { addYears, addMonths, addDays, differenceInDays } = require('date-fns');
-const { format } = require('date-fns-tz'); // Usar date-fns-tz para lidar com fusos horários
+const { format } = require('date-fns-tz');
 
 const columnMapping = {
     'Matrícula': 'matricula',
