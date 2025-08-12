@@ -135,7 +135,7 @@ const remove = async (matricula) => {
  * e popula o banco de dados.
  */
 const importFromXLSX = async (filePath) => {
-    console.log(`[LOG SERVICE] Iniciando processamento do arquivo: ${filePath}`);
+    console.log(`[LOG SERVICE] Iniciando processo de importação para o arquivo: ${filePath}`);
 
     try {
         const workbook = XLSX.readFile(filePath);
@@ -164,14 +164,30 @@ const importFromXLSX = async (filePath) => {
                 }
             }
             
+            // --- CORREÇÃO E VALIDAÇÃO ROBUSTA DE DATA ---
             const admissaoStr = funcionarioMapeado.dth_admissao;
-            const parts = String(admissaoStr).split('/');
-            const admissao = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
-
-            if (isNaN(admissao.getTime())) {
-                console.warn(`[AVISO SERVICE] Matrícula ${funcionarioMapeado.matricula}: Data de admissão inválida ('${admissaoStr}'). Pulando registro.`);
-                continue;
+            if (!admissaoStr) {
+                console.warn(`[AVISO SERVICE] Matrícula ${funcionarioMapeado.matricula}: Data de admissão em branco. Pulando registro.`);
+                continue; // Pula este funcionário se a data de admissão for crucial e estiver faltando
             }
+
+            let admissao;
+            const parts = String(admissaoStr).split('/');
+            if (parts.length === 3) {
+                // Tenta construir a data no formato AAAA-MM-DD para evitar ambiguidades de fuso horário
+                admissao = new Date(`${parts[2]}-${parts[1]}-${parts[0]}T00:00:00`);
+            } else {
+                admissao = new Date(admissaoStr); // Fallback para outros formatos
+            }
+
+            // A VALIDAÇÃO MAIS IMPORTANTE:
+            if (isNaN(admissao.getTime())) {
+                console.warn(`[AVISO SERVICE] Matrícula ${funcionarioMapeado.matricula}: Data de admissão inválida ('${admissaoStr}'). O funcionário será pulado.`);
+                continue; // Pula o registro se a data for inválida
+            }
+            
+            // Atribui a data válida ao objeto
+            funcionarioMapeado.dth_admissao = admissao;
 
             const hoje = new Date();
             const anosDeEmpresa = differenceInDays(hoje, admissao) / 365.25;
@@ -191,20 +207,27 @@ const importFromXLSX = async (filePath) => {
             funcionarioMapeado.dth_limite_ferias = addMonths(fimPeriodo, 11);
             funcionarioMapeado.saldo_dias_ferias = 30;
             
-            console.log(`[LOG SERVICE] Processando Matrícula: ${funcionarioMapeado.matricula}. Limite Férias: ${format(funcionarioMapeado.dth_limite_ferias, 'dd/MM/yyyy')}`);
+            // Opcional: log apenas para os primeiros 10 para não poluir o terminal
+            if (index < 10) {
+                console.log(`[LOG SERVICE] Processando Matrícula: ${funcionarioMapeado.matricula}. Limite Férias: ${format(funcionarioMapeado.dth_limite_ferias, 'dd/MM/yyyy')}`);
+            }
+            
             funcionariosParaProcessar.push(funcionarioMapeado);
         }
 
         if (funcionariosParaProcessar.length === 0) {
             fs.unlinkSync(filePath);
-            throw new Error("Nenhum registro válido com matrícula foi encontrado na planilha.");
+            throw new Error("Nenhum registro válido com matrícula e data de admissão válidas foi encontrado na planilha.");
         }
         
         console.log(`[LOG SERVICE] Processamento concluído. ${funcionariosParaProcessar.length} funcionários serão inseridos/atualizados.`);
 
         await Funcionario.bulkCreate(funcionariosParaProcessar, {
-            updateOnDuplicate: Object.keys(columnMapping).map(k => columnMapping[k]).concat([
-                'periodo_aquisitivo_atual_inicio', 'periodo_aquisitivo_atual_fim', 'dth_limite_ferias', 'saldo_dias_ferias'
+            updateOnDuplicate: Object.values(columnMapping).concat([
+                'periodo_aquisitivo_atual_inicio',
+                'periodo_aquisitivo_atual_fim',
+                'dth_limite_ferias',
+                'saldo_dias_ferias'
             ]).filter(field => field !== 'matricula')
         });
         
@@ -220,7 +243,6 @@ const importFromXLSX = async (filePath) => {
         throw new Error("Ocorreu um erro interno ao processar a planilha. Verifique os logs do servidor.");
     }
 };
-
 
 module.exports = {
   importFromCSV,
