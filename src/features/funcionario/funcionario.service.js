@@ -132,68 +132,99 @@ const remove = async (matricula) => {
 };
 
 
+/**
+ * Processa um arquivo XLSX, aplica as regras de negócio para cada funcionário
+ * e popula o banco de dados.
+ */
 const importFromXLSX = async (filePath) => {
-    return new Promise(async (resolve, reject) => {
-        try {
-            const workbook = XLSX.readFile(filePath);
-            const sheetName = workbook.SheetNames[0];
-            const worksheet = workbook.Sheets[sheetName];
+    console.log(`[LOG] Iniciando processo de importação para o arquivo: ${filePath}`);
+    
+    const workbook = XLSX.readFile(filePath);
+    const sheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
+    const data = XLSX.utils.sheet_to_json(worksheet, { range: 1, raw: false });
+    
+    console.log(`[LOG] Planilha lida. ${data.length} linhas encontradas.`);
 
-            // --- AQUI ESTÁ A CORREÇÃO ---
-            // A opção 'range: 1' instrui a biblioteca a ignorar a primeira linha (índice 0)
-            // e começar a ler a partir da segunda linha (índice 1), que contém seus cabeçalhos.
-            const data = XLSX.utils.sheet_to_json(worksheet, { range: 1, raw: false });
-            
-            // O resto da lógica permanece o mesmo
-            const funcionariosParaCriar = data.map(row => {
-                const funcionario = {};
-                for (const key in row) {
-                    const trimmedKey = key.trim(); 
-                    if (columnMapping[trimmedKey]) {
-                        let value = row[key];
-                        if (trimmedKey.startsWith('Dth.') && value) {
-                            // Tenta converter a data, robusto para diferentes formatos
-                            const parts = String(value).split('/');
-                            if(parts.length === 3) {
-                                // Formato DD/MM/AAAA
-                                value = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
-                            } else {
-                                // Tenta um parse genérico
-                                const parsedDate = new Date(value);
-                                if (!isNaN(parsedDate)) {
-                                    value = parsedDate;
-                                } else {
-                                    value = null; // Data inválida
-                                }
-                            }
-                        }
-                        funcionario[columnMapping[trimmedKey]] = value || null;
-                    }
-                }
-                return funcionario;
-            }).filter(f => f.matricula);
+    const funcionariosParaProcessar = [];
 
-            if (funcionariosParaCriar.length === 0) {
-                fs.unlinkSync(filePath);
-                return reject(new Error("Nenhum registro válido encontrado. Verifique se os nomes das colunas na linha 2 da planilha correspondem ao padrão."));
+    // 1. Mapeia e calcula os dados para cada funcionário da planilha
+    for (const row of data) {
+        if (!row['Matrícula']) continue; // Pula linhas sem matrícula
+
+        const funcionarioMapeado = {};
+        for (const key in row) {
+            const trimmedKey = key.trim();
+            if (columnMapping[trimmedKey]) {
+                funcionarioMapeado[columnMapping[trimmedKey]] = row[key] || null;
             }
-
-            await Funcionario.bulkCreate(funcionariosParaCriar, {
-                updateOnDuplicate: Object.values(columnMapping).filter(field => field !== 'matricula')
-            });
-
-            fs.unlinkSync(filePath);
-            resolve({ message: `${funcionariosParaCriar.length} registros processados com sucesso do arquivo XLSX.` });
-
-        } catch (error) {
-            if (fs.existsSync(filePath)) {
-                fs.unlinkSync(filePath);
-            }
-            console.error("Erro detalhado no serviço de importação:", error);
-            reject(new Error("Ocorreu um erro interno ao processar a planilha."));
         }
-    });
+        
+        // --- APLICAÇÃO DAS REGRAS DE NEGÓCIO DIRETAMENTE NA IMPORTAÇÃO ---
+
+        const admissao = new Date(funcionarioMapeado.dth_admissao);
+        if (isNaN(admissao.getTime())) {
+            console.warn(`[AVISO] Matrícula ${funcionarioMapeado.matricula}: Data de admissão inválida. Pulando registro.`);
+            continue;
+        }
+
+        // Regra 1: Período Aquisitivo e Data Limite
+        const anosDeEmpresa = differenceInDays(new Date(), admissao) / 365.25;
+        const ultimoAniversario = addYears(admissao, Math.floor(anosDeEmpresa));
+        
+        let inicioPeriodo = ultimoAniversario;
+        if (inicioPeriodo > new Date()) {
+            inicioPeriodo = addYears(inicioPeriodo, -1);
+        }
+        let fimPeriodo = addDays(addYears(inicioPeriodo, 1), -1);
+
+        // Regra 4.2 (simplificada): Afastamentos suspendem o período.
+        // A lógica completa será acionada ao lançar afastamentos individualmente.
+        // Aqui, usamos o campo "DiasAfastado" para um ajuste inicial.
+        const diasAfastado = parseInt(funcionarioMapeado.dias_afastado, 10) || 0;
+        fimPeriodo = addDays(fimPeriodo, diasAfastado);
+
+        funcionarioMapeado.periodo_aquisitivo_atual_inicio = inicioPeriodo;
+        funcionarioMapeado.periodo_aquisitivo_atual_fim = fimPeriodo;
+        funcionarioMapeado.dth_limite_ferias = addMonths(fimPeriodo, 11);
+
+        // Regra 3: Saldo de Férias baseado em Faltas (na importação, não temos essa info, então começamos com 30)
+        // O campo 'faltas_injustificadas_periodo' pode ser atualizado manualmente depois.
+        funcionarioMapeado.saldo_dias_ferias = 30; // Valor padrão inicial
+        
+        console.log(`[LOG] Processando Matrícula: ${funcionarioMapeado.matricula}. Limite de Férias calculado: ${format(funcionarioMapeado.dth_limite_ferias, 'dd/MM/yyyy')}`);
+        funcionariosParaProcessar.push(funcionarioMapeado);
+    }
+
+    if (funcionariosParaProcessar.length === 0) {
+        fs.unlinkSync(filePath);
+        throw new Error("Nenhum registro válido com matrícula foi encontrado na planilha.");
+    }
+    
+    console.log(`[LOG] Processamento concluído. ${funcionariosParaProcessar.length} funcionários serão inseridos/atualizados.`);
+
+    // 2. Insere/Atualiza os dados no banco de dados
+    try {
+        await Funcionario.bulkCreate(funcionariosParaProcessar, {
+            updateOnDuplicate: Object.values(columnMapping).concat([
+                'periodo_aquisitivo_atual_inicio',
+                'periodo_aquisitivo_atual_fim',
+                'dth_limite_ferias',
+                'saldo_dias_ferias'
+            ]).filter(field => field !== 'matricula')
+        });
+        
+        console.log(`[LOG] SUCESSO! ${funcionariosParaProcessar.length} registros foram salvos no banco de dados.`);
+        fs.unlinkSync(filePath);
+        return { message: `${funcionariosParaProcessar.length} registros processados e salvos com sucesso.` };
+
+    } catch (dbError) {
+        console.error("[ERRO DB] Falha ao executar bulkCreate:", dbError);
+        fs.unlinkSync(filePath);
+        throw new Error("Ocorreu um erro ao salvar os dados no banco.");
+    }
 };
+
 
 module.exports = {
   importFromCSV,
