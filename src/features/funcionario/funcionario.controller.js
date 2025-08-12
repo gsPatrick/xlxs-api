@@ -108,7 +108,6 @@ const importFile = async (req, res) => {
 };
 
 module.exports = {
-  importCSV,
   create,
   findAll,
   findOne,
