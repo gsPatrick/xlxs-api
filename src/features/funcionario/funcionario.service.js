@@ -1,11 +1,13 @@
 // src/features/funcionario/funcionario.service.js
 
-const { Funcionario } = require('../../models');
+const { Op } = require('sequelize');
+const { Funcionario, Ferias, Afastamento } = require('../../models');
 const fs = require('fs');
 const XLSX = require('xlsx');
 const { addYears, addMonths, addDays, differenceInDays } = require('date-fns');
-const { format } = require('date-fns-tz'); // Usar date-fns-tz para lidar com fusos horários
+const { format } = require('date-fns-tz');
 
+// Mapeamento de colunas da planilha para o modelo do banco de dados
 const columnMapping = {
     'Matrícula': 'matricula',
     'Nome Funcionário': 'nome_funcionario',
@@ -14,11 +16,10 @@ const columnMapping = {
     'Municipio_Local_Trabalho': 'municipio_local_trabalho',
     'DiasAfastado': 'dias_afastado',
     'Dth. Última Férias': 'dth_ultima_ferias',
-    'Dth. Último Planejamento': 'dth_ultimo_planejamento',
-    'Dth. Limite Férias': 'dth_limite_ferias',
-    'Dth. Início Período': 'dth_inicio_periodo',
-    'Dth. Final Período': 'dth_final_periodo',
-    'Qtd. Dias Férias': 'qtd_dias_ferias',
+    'Dth. Limite Férias': 'dth_limite_ferias_legado',
+    'Dth. Início Período': 'periodo_aquisitivo_inicio_legado',
+    'Dth. Final Período': 'periodo_aquisitivo_fim_legado',
+    'Qtd. Dias Férias': 'qtd_dias_ferias_legado',
     'Razão Social Filial': 'razao_social_filial',
     'Código Filial': 'codigo_filial',
     'Categoria': 'categoria',
@@ -28,107 +29,6 @@ const columnMapping = {
     'Afastamento': 'afastamento',
     'Convenção': 'convencao',
 };
-
-// Lógica de importação de CSV (mantida e ajustada)
-const importFromCSV = async (filePath) => {
-  // ... (a lógica de importação que já tínhamos) ...
-};
-
-// Lógica de exportação, agora para XLSX
-const exportAllToXLSX = async () => {
-  const funcionarios = await Funcionario.findAll({ raw: true });
-  const ws = XLSX.utils.json_to_sheet(funcionarios);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Funcionarios");
-  const buffer = XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' });
-  return { buffer, fileName: 'Relatorio_Funcionarios.xlsx' };
-};
-
-// Cria um novo funcionário
-const create = async (dadosFuncionario) => {
-  // Poderia ter validações aqui antes de criar
-  const novoFuncionario = await Funcionario.create(dadosFuncionario);
-  return novoFuncionario;
-};
-
-// Busca todos os funcionários com filtros avançados
-const findAll = async (queryParams) => {
-  const whereClause = {};
-
-  // Filtro por nome ou matrícula
-  if (queryParams.busca) {
-    whereClause[Op.or] = [
-      { nome_funcionario: { [Op.iLike]: `%${queryParams.busca}%` } },
-      { matricula: { [Op.iLike]: `%${queryParams.busca}%` } }
-    ];
-  }
-
-  // Filtro por status
-  if (queryParams.status) {
-    whereClause.status = queryParams.status;
-  }
-  
-  // Filtro rápido do dashboard
-  if (queryParams.filtro) {
-    const hoje = new Date();
-    if (queryParams.filtro === 'vencidas') {
-      whereClause.dth_limite_ferias = { [Op.lt]: hoje };
-    }
-    if (queryParams.filtro === 'risco_iminente') {
-      const dataLimiteRisco = addDays(hoje, 30);
-      whereClause.dth_limite_ferias = { [Op.between]: [hoje, dataLimiteRisco] };
-    }
-  }
-
-  const funcionarios = await Funcionario.findAll({
-    where: whereClause,
-    order: [['nome_funcionario', 'ASC']]
-  });
-  return funcionarios;
-};
-
-// Busca um único funcionário com seus relacionamentos
-const findOne = async (matricula) => {
-  const funcionario = await Funcionario.findByPk(matricula, {
-    include: [
-      {
-        model: Ferias,
-        as: 'historicoFerias',
-        order: [['data_inicio', 'DESC']],
-      },
-      {
-        model: Afastamento,
-        as: 'historicoAfastamentos',
-        order: [['data_inicio', 'DESC']],
-      }
-    ]
-  });
-  return funcionario;
-};
-
-// Atualiza os dados de um funcionário
-const update = async (matricula, dadosParaAtualizar) => {
-  const funcionario = await Funcionario.findByPk(matricula);
-  if (!funcionario) {
-    throw new Error('Funcionário não encontrado');
-  }
-  // Remove a matrícula do objeto de atualização para evitar alteração da PK
-  delete dadosParaAtualizar.matricula;
-  
-  await funcionario.update(dadosParaAtualizar);
-  return funcionario;
-};
-
-// Remove um funcionário do banco de dados
-const remove = async (matricula) => {
-  const funcionario = await Funcionario.findByPk(matricula);
-  if (!funcionario) {
-    throw new Error('Funcionário não encontrado');
-  }
-  await funcionario.destroy();
-  return { message: 'Funcionário removido com sucesso.' };
-};
-
 
 /**
  * Processa um arquivo XLSX, aplica as regras de negócio para cada funcionário
@@ -164,29 +64,25 @@ const importFromXLSX = async (filePath) => {
                 }
             }
             
-            // --- CORREÇÃO E VALIDAÇÃO ROBUSTA DE DATA ---
             const admissaoStr = funcionarioMapeado.dth_admissao;
             if (!admissaoStr) {
                 console.warn(`[AVISO SERVICE] Matrícula ${funcionarioMapeado.matricula}: Data de admissão em branco. Pulando registro.`);
-                continue; // Pula este funcionário se a data de admissão for crucial e estiver faltando
+                continue;
             }
 
             let admissao;
             const parts = String(admissaoStr).split('/');
             if (parts.length === 3) {
-                // Tenta construir a data no formato AAAA-MM-DD para evitar ambiguidades de fuso horário
                 admissao = new Date(`${parts[2]}-${parts[1]}-${parts[0]}T00:00:00`);
             } else {
-                admissao = new Date(admissaoStr); // Fallback para outros formatos
+                admissao = new Date(admissaoStr);
             }
 
-            // A VALIDAÇÃO MAIS IMPORTANTE:
             if (isNaN(admissao.getTime())) {
-                console.warn(`[AVISO SERVICE] Matrícula ${funcionarioMapeado.matricula}: Data de admissão inválida ('${admissaoStr}'). O funcionário será pulado.`);
-                continue; // Pula o registro se a data for inválida
+                console.warn(`[AVISO SERVICE] Matrícula ${funcionarioMapeado.matricula}: Data de admissão inválida ('${admissaoStr}'). Pulando registro.`);
+                continue;
             }
             
-            // Atribui a data válida ao objeto
             funcionarioMapeado.dth_admissao = admissao;
 
             const hoje = new Date();
@@ -207,8 +103,7 @@ const importFromXLSX = async (filePath) => {
             funcionarioMapeado.dth_limite_ferias = addMonths(fimPeriodo, 11);
             funcionarioMapeado.saldo_dias_ferias = 30;
             
-            // Opcional: log apenas para os primeiros 10 para não poluir o terminal
-            if (index < 10) {
+            if (index < 10) { // Loga apenas os 10 primeiros para não poluir
                 console.log(`[LOG SERVICE] Processando Matrícula: ${funcionarioMapeado.matricula}. Limite Férias: ${format(funcionarioMapeado.dth_limite_ferias, 'dd/MM/yyyy')}`);
             }
             
@@ -244,13 +139,83 @@ const importFromXLSX = async (filePath) => {
     }
 };
 
+const create = async (dadosFuncionario) => {
+  const novoFuncionario = await Funcionario.create(dadosFuncionario);
+  return novoFuncionario;
+};
+
+const findAll = async (queryParams) => {
+  const whereClause = {};
+  if (queryParams.busca) {
+    whereClause[Op.or] = [
+      { nome_funcionario: { [Op.iLike]: `%${queryParams.busca}%` } },
+      { matricula: { [Op.iLike]: `%${queryParams.busca}%` } }
+    ];
+  }
+  if (queryParams.status) {
+    whereClause.status = queryParams.status;
+  }
+  if (queryParams.filtro) {
+    const hoje = new Date();
+    if (queryParams.filtro === 'vencidas') {
+      whereClause.dth_limite_ferias = { [Op.lt]: hoje };
+    }
+    if (queryParams.filtro === 'risco_iminente') {
+      const dataLimiteRisco = addDays(hoje, 30);
+      whereClause.dth_limite_ferias = { [Op.between]: [hoje, dataLimiteRisco] };
+    }
+  }
+  return Funcionario.findAll({ where: whereClause, order: [['nome_funcionario', 'ASC']] });
+};
+
+const findOne = async (matricula) => {
+  const funcionario = await Funcionario.findByPk(matricula, {
+    include: [
+      {
+        model: Ferias,
+        as: 'historicoFerias',
+        order: [['data_inicio', 'DESC']],
+      },
+      {
+        model: Afastamento,
+        as: 'historicoAfastamentos',
+        order: [['data_inicio', 'DESC']],
+      }
+    ]
+  });
+  return funcionario;
+};
+
+const update = async (matricula, dadosParaAtualizar) => {
+  const funcionario = await Funcionario.findByPk(matricula);
+  if (!funcionario) throw new Error('Funcionário não encontrado');
+  delete dadosParaAtualizar.matricula;
+  await funcionario.update(dadosParaAtualizar);
+  return funcionario;
+};
+
+const remove = async (matricula) => {
+  const funcionario = await Funcionario.findByPk(matricula);
+  if (!funcionario) throw new Error('Funcionário não encontrado');
+  await funcionario.destroy();
+  return { message: 'Funcionário removido com sucesso.' };
+};
+
+const exportAllToXLSX = async () => {
+  const funcionarios = await Funcionario.findAll({ raw: true });
+  const ws = XLSX.utils.json_to_sheet(funcionarios);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Funcionarios");
+  const buffer = XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' });
+  return { buffer, fileName: 'Relatorio_Completo_Funcionarios.xlsx' };
+};
+
 module.exports = {
-  importFromCSV,
-  exportAllToXLSX,
+  importFromXLSX,
   create,
   findAll,
   findOne,
   update,
   remove,
-  importFromXLSX
+  exportAllToXLSX,
 };
