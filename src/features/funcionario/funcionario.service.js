@@ -137,91 +137,89 @@ const remove = async (matricula) => {
  * e popula o banco de dados.
  */
 const importFromXLSX = async (filePath) => {
-    console.log(`[LOG] Iniciando processo de importação para o arquivo: ${filePath}`);
-    
-    const workbook = XLSX.readFile(filePath);
-    const sheetName = workbook.SheetNames[0];
-    const worksheet = workbook.Sheets[sheetName];
-    const data = XLSX.utils.sheet_to_json(worksheet, { range: 1, raw: false });
-    
-    console.log(`[LOG] Planilha lida. ${data.length} linhas encontradas.`);
+    console.log(`[LOG SERVICE] Iniciando processamento do arquivo: ${filePath}`);
 
-    const funcionariosParaProcessar = [];
-
-    // 1. Mapeia e calcula os dados para cada funcionário da planilha
-    for (const row of data) {
-        if (!row['Matrícula']) continue; // Pula linhas sem matrícula
-
-        const funcionarioMapeado = {};
-        for (const key in row) {
-            const trimmedKey = key.trim();
-            if (columnMapping[trimmedKey]) {
-                funcionarioMapeado[columnMapping[trimmedKey]] = row[key] || null;
-            }
-        }
-        
-        // --- APLICAÇÃO DAS REGRAS DE NEGÓCIO DIRETAMENTE NA IMPORTAÇÃO ---
-
-        const admissao = new Date(funcionarioMapeado.dth_admissao);
-        if (isNaN(admissao.getTime())) {
-            console.warn(`[AVISO] Matrícula ${funcionarioMapeado.matricula}: Data de admissão inválida. Pulando registro.`);
-            continue;
-        }
-
-        // Regra 1: Período Aquisitivo e Data Limite
-        const anosDeEmpresa = differenceInDays(new Date(), admissao) / 365.25;
-        const ultimoAniversario = addYears(admissao, Math.floor(anosDeEmpresa));
-        
-        let inicioPeriodo = ultimoAniversario;
-        if (inicioPeriodo > new Date()) {
-            inicioPeriodo = addYears(inicioPeriodo, -1);
-        }
-        let fimPeriodo = addDays(addYears(inicioPeriodo, 1), -1);
-
-        // Regra 4.2 (simplificada): Afastamentos suspendem o período.
-        // A lógica completa será acionada ao lançar afastamentos individualmente.
-        // Aqui, usamos o campo "DiasAfastado" para um ajuste inicial.
-        const diasAfastado = parseInt(funcionarioMapeado.dias_afastado, 10) || 0;
-        fimPeriodo = addDays(fimPeriodo, diasAfastado);
-
-        funcionarioMapeado.periodo_aquisitivo_atual_inicio = inicioPeriodo;
-        funcionarioMapeado.periodo_aquisitivo_atual_fim = fimPeriodo;
-        funcionarioMapeado.dth_limite_ferias = addMonths(fimPeriodo, 11);
-
-        // Regra 3: Saldo de Férias baseado em Faltas (na importação, não temos essa info, então começamos com 30)
-        // O campo 'faltas_injustificadas_periodo' pode ser atualizado manualmente depois.
-        funcionarioMapeado.saldo_dias_ferias = 30; // Valor padrão inicial
-        
-        console.log(`[LOG] Processando Matrícula: ${funcionarioMapeado.matricula}. Limite de Férias calculado: ${format(funcionarioMapeado.dth_limite_ferias, 'dd/MM/yyyy')}`);
-        funcionariosParaProcessar.push(funcionarioMapeado);
-    }
-
-    if (funcionariosParaProcessar.length === 0) {
-        fs.unlinkSync(filePath);
-        throw new Error("Nenhum registro válido com matrícula foi encontrado na planilha.");
-    }
-    
-    console.log(`[LOG] Processamento concluído. ${funcionariosParaProcessar.length} funcionários serão inseridos/atualizados.`);
-
-    // 2. Insere/Atualiza os dados no banco de dados
     try {
+        const workbook = XLSX.readFile(filePath);
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        
+        console.log(`[LOG SERVICE] Lendo planilha: '${sheetName}'`);
+
+        const data = XLSX.utils.sheet_to_json(worksheet, { range: 1, raw: false, dateNF: 'dd/mm/yyyy' });
+        
+        console.log(`[LOG SERVICE] Planilha convertida para JSON. ${data.length} linhas de dados encontradas.`);
+
+        const funcionariosParaProcessar = [];
+
+        for (const [index, row] of data.entries()) {
+            if (!row['Matrícula']) {
+                console.warn(`[AVISO SERVICE] Linha ${index + 2}: Matrícula não encontrada. Pulando linha.`);
+                continue;
+            }
+
+            const funcionarioMapeado = {};
+            for (const key in row) {
+                const trimmedKey = key.trim();
+                if (columnMapping[trimmedKey]) {
+                    funcionarioMapeado[columnMapping[trimmedKey]] = row[key] || null;
+                }
+            }
+            
+            const admissaoStr = funcionarioMapeado.dth_admissao;
+            const parts = String(admissaoStr).split('/');
+            const admissao = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
+
+            if (isNaN(admissao.getTime())) {
+                console.warn(`[AVISO SERVICE] Matrícula ${funcionarioMapeado.matricula}: Data de admissão inválida ('${admissaoStr}'). Pulando registro.`);
+                continue;
+            }
+
+            const hoje = new Date();
+            const anosDeEmpresa = differenceInDays(hoje, admissao) / 365.25;
+            const ultimoAniversario = addYears(admissao, Math.floor(anosDeEmpresa));
+            
+            let inicioPeriodo = ultimoAniversario;
+            if (inicioPeriodo > hoje) {
+                inicioPeriodo = addYears(inicioPeriodo, -1);
+            }
+            let fimPeriodo = addDays(addYears(inicioPeriodo, 1), -1);
+
+            const diasAfastado = parseInt(funcionarioMapeado.dias_afastado, 10) || 0;
+            fimPeriodo = addDays(fimPeriodo, diasAfastado);
+
+            funcionarioMapeado.periodo_aquisitivo_atual_inicio = inicioPeriodo;
+            funcionarioMapeado.periodo_aquisitivo_atual_fim = fimPeriodo;
+            funcionarioMapeado.dth_limite_ferias = addMonths(fimPeriodo, 11);
+            funcionarioMapeado.saldo_dias_ferias = 30;
+            
+            console.log(`[LOG SERVICE] Processando Matrícula: ${funcionarioMapeado.matricula}. Limite Férias: ${format(funcionarioMapeado.dth_limite_ferias, 'dd/MM/yyyy')}`);
+            funcionariosParaProcessar.push(funcionarioMapeado);
+        }
+
+        if (funcionariosParaProcessar.length === 0) {
+            fs.unlinkSync(filePath);
+            throw new Error("Nenhum registro válido com matrícula foi encontrado na planilha.");
+        }
+        
+        console.log(`[LOG SERVICE] Processamento concluído. ${funcionariosParaProcessar.length} funcionários serão inseridos/atualizados.`);
+
         await Funcionario.bulkCreate(funcionariosParaProcessar, {
-            updateOnDuplicate: Object.values(columnMapping).concat([
-                'periodo_aquisitivo_atual_inicio',
-                'periodo_aquisitivo_atual_fim',
-                'dth_limite_ferias',
-                'saldo_dias_ferias'
+            updateOnDuplicate: Object.keys(columnMapping).map(k => columnMapping[k]).concat([
+                'periodo_aquisitivo_atual_inicio', 'periodo_aquisitivo_atual_fim', 'dth_limite_ferias', 'saldo_dias_ferias'
             ]).filter(field => field !== 'matricula')
         });
         
-        console.log(`[LOG] SUCESSO! ${funcionariosParaProcessar.length} registros foram salvos no banco de dados.`);
+        console.log(`[LOG SERVICE] SUCESSO! ${funcionariosParaProcessar.length} registros foram salvos no banco de dados.`);
         fs.unlinkSync(filePath);
         return { message: `${funcionariosParaProcessar.length} registros processados e salvos com sucesso.` };
 
-    } catch (dbError) {
-        console.error("[ERRO DB] Falha ao executar bulkCreate:", dbError);
-        fs.unlinkSync(filePath);
-        throw new Error("Ocorreu um erro ao salvar os dados no banco.");
+    } catch (err) {
+        console.error("[ERRO FATAL SERVICE] Falha na importação:", err);
+        if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+        }
+        throw new Error("Ocorreu um erro interno ao processar a planilha. Verifique os logs do servidor.");
     }
 };
 

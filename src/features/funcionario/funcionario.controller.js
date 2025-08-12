@@ -93,16 +93,27 @@ const exportAll = async (req, res) => {
     }
 };
 
-const importFile = async (req, res) => { // Renomeado para ser genérico
+// Renomeado para 'importFile' para ser genérico (aceita XLSX)
+const importFile = async (req, res) => {
+  console.log('[LOG CONTROLLER] Requisição de importação recebida.'); // LOG 1
+
   try {
     if (!req.file) {
+      console.log('[LOG CONTROLLER] Erro: Nenhum arquivo enviado.');
       return res.status(400).send({ message: 'Nenhum arquivo enviado.' });
     }
-    // CHAMA A NOVA FUNÇÃO DE IMPORTAÇÃO XLSX
+    
+    console.log(`[LOG CONTROLLER] Arquivo recebido: ${req.file.originalname}, tamanho: ${req.file.size} bytes.`); // LOG 2
+    console.log('[LOG CONTROLLER] Chamando o serviço importFromXLSX...'); // LOG 3
+
+    // Garante que está chamando a função 'importFromXLSX' que existe no serviço
     const result = await funcionarioService.importFromXLSX(req.file.path);
+
+    console.log('[LOG CONTROLLER] Serviço executado com sucesso. Enviando resposta.'); // LOG 4
     res.status(200).send(result);
+
   } catch (error) {
-    console.error('Erro no controller ao importar arquivo:', error);
+    console.error('[ERRO CONTROLLER] Falha na importação:', error); // LOG DE ERRO
     res.status(500).send({ message: 'Falha ao processar o arquivo.', error: error.message });
   }
 };
