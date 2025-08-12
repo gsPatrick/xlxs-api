@@ -3,6 +3,7 @@
 const express = require('express');
 const multer = require('multer');
 const funcionarioController = require('./funcionario.controller');
+const afastamentoController = require('../afastamento/afastamento.controller'); 
 
 const router = express.Router();
 const upload = multer({ dest: 'uploads/' }); // Para o upload de CSV

@@ -1,7 +1,7 @@
 // src/routes/index.js
 
 const express = require('express');
-const { protect } = require('../middleware/auth.middleware');
+const { protect } = require('../features/middleware/auth.middleware');
 
 // Importar todos os roteadores das features
 const authRoutes = require('../features/auth/auth.routes');
