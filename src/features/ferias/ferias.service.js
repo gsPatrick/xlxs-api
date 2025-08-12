@@ -1,7 +1,7 @@
 // src/features/ferias/ferias.service.js
 
 const { Op } = require('sequelize');
-const { Funcionario, Ferias, Afastamento, Planejamento } = require('../../models');
+const { Ferias, Funcionario, Planejamento, Afastamento } = require('../../models');
 const { addYears, addMonths, addDays, differenceInDays, isWithinInterval, getDay, format } = require('date-fns');
 
 // --- FUNÇÃO CENTRAL DE REGRAS DE NEGÓCIO ---
@@ -193,16 +193,20 @@ async function create(dadosFerias) {
 };
 
 async function findAll(queryParams) {
+    const includeClause = [
+        { model: Funcionario, required: true },
+        { model: Planejamento, required: true }
+    ];
     const whereClause = {};
+
     if (queryParams.planejamento === 'ativo') {
-        whereClause['$Planejamento.status$'] = 'ativo';
+        // Filtra pelo status 'ativo' do modelo Planejamento associado.
+        includeClause[1].where = { status: 'ativo' };
     }
+    
     return Ferias.findAll({
         where: whereClause,
-        include: [
-            { model: Funcionario, required: true },
-            { model: Planejamento, required: true }
-        ],
+        include: includeClause,
         order: [['data_inicio', 'ASC']]
     });
 }
