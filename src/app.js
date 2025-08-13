@@ -31,7 +31,7 @@ const startServer = async () => {
     
     // 2. Sincroniza os modelos
     // ATENÇÃO: `force: true` apaga todas as tabelas e as recria. Use apenas em desenvolvimento.
-    await db.sequelize.sync({ force: true }); 
+    await db.sequelize.sync(); 
     console.log('Todos os modelos foram sincronizados com sucesso.');
 
     // 3. SEEDING DO USUÁRIO ADMIN
