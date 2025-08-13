@@ -20,6 +20,20 @@ const ativar = async (req, res) => {
         console.error("Erro no controller ao ativar planejamento:", error);
         res.status(500).send({ message: 'Falha ao restaurar planejamento.', error: error.message });
     }
+}
+
+// ======================================================================
+// NOVO MÉTODO NO CONTROLLER
+// ======================================================================
+const getVisaoGeral = async (req, res) => {
+    try {
+        const eventos = await planejamentoService.getVisaoGeral(req.query);
+        res.status(200).send(eventos);
+    } catch (error) {
+        console.error("Erro no controller ao buscar visão geral do planejamento:", error);
+        res.status(500).send({ message: 'Falha ao buscar visão geral.', error: error.message });
+    }
 };
 
-module.exports = { findAll, ativar };
+
+module.exports = { findAll, ativar,getVisaoGeral };

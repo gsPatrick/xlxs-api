@@ -10,4 +10,10 @@ router.get('/', planejamentoController.findAll);
 // PUT /api/planejamentos/:id/ativar -> Ativa (restaura) um planejamento específico
 router.put('/:id/ativar', planejamentoController.ativar);
 
+// ======================================================================
+// NOVA ROTA PARA A VISÃO GERAL
+// ======================================================================
+// GET /api/planejamentos/visao-geral?ano=2024&mes=12
+router.get('/visao-geral', planejamentoController.getVisaoGeral);
+
 module.exports = router;
