@@ -9,6 +9,13 @@ const User = sequelize.define('User', {
     autoIncrement: true,
     primaryKey: true,
   },
+  // ===================================
+  // NOVO CAMPO ADICIONADO
+  // ===================================
+  nome: {
+    type: DataTypes.STRING,
+    allowNull: false, // Tornamos o nome obrigatório
+  },
   email: {
     type: DataTypes.STRING,
     allowNull: false,
@@ -23,19 +30,17 @@ const User = sequelize.define('User', {
   },
   role: {
     type: DataTypes.STRING,
-    defaultValue: 'admin', // Por enquanto, todos são admins
+    defaultValue: 'admin',
   }
 }, {
   tableName: 'users',
   hooks: {
-    // Antes de criar um usuário, criptografa a senha
     beforeCreate: async (user) => {
       if (user.password) {
         const salt = await bcrypt.genSalt(10);
         user.password = await bcrypt.hash(user.password, salt);
       }
     },
-    // Antes de atualizar, faz o mesmo se a senha foi modificada
     beforeUpdate: async (user) => {
         if (user.changed('password')) {
             const salt = await bcrypt.genSalt(10);
@@ -45,7 +50,6 @@ const User = sequelize.define('User', {
   }
 });
 
-// Método de instância para verificar a senha
 User.prototype.isValidPassword = async function(password) {
     return await bcrypt.compare(password, this.password);
 }
