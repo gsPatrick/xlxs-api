@@ -24,36 +24,52 @@ const columnMapping = {
     'Convenção': 'convencao',
 };
 
-/**
- * Processa um arquivo XLSX, LIMPA O BANCO DE DADOS (funcionários, férias, afastamentos)
- * e insere os novos dados aplicando as regras de negócio.
- */
+// Função helper para normalizar os nomes das colunas
+const normalizeHeader = (header) => {
+    return header.toString().toLowerCase().trim()
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+};
+
 const importFromXLSX = async (filePath) => {
-    console.log(`[LOG FUNCIONARIO SERVICE] Iniciando processo de importação com RESET para o arquivo: ${filePath}`);
+    console.log(`[LOG FUNCIONARIO SERVICE] Iniciando processo de importação para: ${filePath}`);
     const t = await sequelize.transaction();
 
     try {
         const workbook = XLSX.readFile(filePath);
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
-        const data = XLSX.utils.sheet_to_json(worksheet, { raw: false, dateNF: 'dd/MM/yyyy' });
         
-        console.log(`[LOG FUNCIONARIO SERVICE] Planilha lida. ${data.length} linhas encontradas.`);
+        // ======================================================================
+        // CORREÇÃO CENTRAL: Ignorar a primeira linha da planilha.
+        // A opção `range: 1` diz à biblioteca para começar a ler a partir da segunda linha (índice 1).
+        // A primeira linha (índice 0) será completamente ignorada, e a segunda linha será usada como cabeçalho.
+        // ======================================================================
+        const data = XLSX.utils.sheet_to_json(worksheet, { range: 1, raw: false, dateNF: 'dd/MM/yyyy' });
+        
+        console.log(`[LOG FUNCIONARIO SERVICE] Planilha lida a partir da segunda linha. ${data.length} linhas de dados encontradas.`);
 
         const funcionariosParaProcessar = [];
+        let linhasInvalidas = 0;
+
         for (const row of data) {
             const funcionarioMapeado = {};
             for (const key in row) {
-                const trimmedKey = key.trim();
-                if (columnMapping[trimmedKey]) {
-                    funcionarioMapeado[columnMapping[trimmedKey]] = row[key] || null;
+                const normalizedKey = normalizeHeader(key);
+                if (columnMapping[normalizedKey]) {
+                    funcionarioMapeado[columnMapping[normalizedKey]] = row[key] || null;
                 }
             }
             
-            if (!funcionarioMapeado.matricula || !funcionarioMapeado.dth_admissao) continue;
+            if (!funcionarioMapeado.matricula || !funcionarioMapeado.dth_admissao) {
+                linhasInvalidas++;
+                continue;
+            }
 
-            const admissao = parse(funcionarioMapeado.dth_admissao, 'dd/MM/yyyy', new Date());
-            if (isNaN(admissao.getTime())) continue;
+            const admissao = parse(String(funcionarioMapeado.dth_admissao), 'dd/MM/yyyy', new Date());
+            if (isNaN(admissao.getTime())) {
+                linhasInvalidas++;
+                continue;
+            }
             funcionarioMapeado.dth_admissao = admissao;
 
             const hoje = new Date();
@@ -75,41 +91,36 @@ const importFromXLSX = async (filePath) => {
             
             funcionariosParaProcessar.push(funcionarioMapeado);
         }
+        
+        console.log(`[LOG FUNCIONARIO SERVICE] Processamento concluído. ${funcionariosParaProcessar.length} registros válidos. ${linhasInvalidas} linhas inválidas puladas.`);
 
         if (funcionariosParaProcessar.length === 0) {
-            throw new Error("Nenhum registro válido foi encontrado na planilha.");
+            throw new Error(`Nenhum registro válido foi encontrado na planilha. Verifique se as colunas "Matrícula" e "Dth. Admissão" (a partir da segunda linha) existem e se as datas estão no formato DD/MM/AAAA.`);
         }
         
-        console.log(`[LOG FUNCIONARIO SERVICE] Processamento de regras de negócio concluído.`);
-        console.log('[LOG DB] Limpando dados antigos (Férias, Afastamentos, Funcionários)...');
+        console.log('[LOG DB] Limpando dados antigos...');
         await Ferias.destroy({ where: {}, truncate: true, transaction: t });
         await Afastamento.destroy({ where: {}, truncate: true, transaction: t });
         await Funcionario.destroy({ where: {}, truncate: true, transaction: t });
-        console.log('[LOG DB] Tabelas limpas com sucesso.');
 
-        console.log(`[LOG DB] Inserindo ${funcionariosParaProcessar.length} novos registros de funcionários...`);
+        console.log(`[LOG DB] Inserindo ${funcionariosParaProcessar.length} novos funcionários...`);
         await Funcionario.bulkCreate(funcionariosParaProcessar, { transaction: t });
         
-        console.log('[LOG FUNCIONARIO SERVICE] Chamando o serviço para gerar o planejamento de férias inicial...');
+        console.log('[LOG FUNCIONARIO SERVICE] Chamando serviço para gerar planejamento inicial...');
         const anoAtual = new Date().getFullYear();
-        await feriasService.distribuirFerias(
-            anoAtual, 
-            `Planejamento inicial gerado após importação em ${new Date().toLocaleDateString('pt-BR')}`, 
-            t
-        );
-        console.log('[LOG FUNCIONARIO SERVICE] Planejamento inicial gerado com sucesso.');
+        await feriasService.distribuirFerias(anoAtual, `Planejamento inicial gerado após importação`, t);
 
         await t.commit();
         
         console.log(`[LOG FUNCIONARIO SERVICE] SUCESSO! Transação concluída.`);
         fs.unlinkSync(filePath);
-        return { message: `Importação concluída! ${funcionariosParaProcessar.length} funcionários cadastrados e o planejamento de férias inicial foi gerado.` };
+        return { message: `Importação concluída! ${funcionariosParaProcessar.length} funcionários cadastrados. ${linhasInvalidas > 0 ? `${linhasInvalidas} linhas foram ignoradas.` : ''}` };
 
     } catch (err) {
         await t.rollback();
-        console.error("[ERRO FATAL SERVICE] A transação foi revertida. Nenhum dado foi alterado no banco.", err);
+        console.error("[ERRO FATAL SERVICE] A transação foi revertida.", err);
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-        throw new Error("Ocorreu um erro crítico durante a importação. O banco de dados foi restaurado ao estado anterior. Verifique os logs do servidor para mais detalhes.");
+        throw new Error(err.message || "Ocorreu um erro crítico durante a importação.");
     }
 };
 
