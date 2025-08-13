@@ -17,7 +17,6 @@ const Funcionario = sequelize.define('Funcionario', {
     type: DataTypes.DATE,
     allowNull: false,
   },
-  // ... outros campos da planilha ...
   convencao: { type: DataTypes.STRING },
   status: {
     type: DataTypes.STRING,
@@ -27,20 +26,30 @@ const Funcionario = sequelize.define('Funcionario', {
     type: DataTypes.DECIMAL(10, 2),
     allowNull: true,
   },
+  // ==========================================================
+  // COLUNA FALTANTE ADICIONADA
+  // Esta coluna será preenchida com o valor da planilha.
+  // ==========================================================
+  afastamento: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    comment: 'Descrição do último status de afastamento, importado da planilha.'
+  },
+  
   // NOVOS CAMPOS PARA CONTROLE PRECISO
   periodo_aquisitivo_atual_inicio: {
     type: DataTypes.DATEONLY,
     allowNull: true,
-    comment: 'Data de início do período aquisitivo corrente, já ajustada por afastamentos.'
+    comment: 'Data de início do período aquisitivo corrente.'
   },
   periodo_aquisitivo_atual_fim: {
     type: DataTypes.DATEONLY,
     allowNull: true,
-    comment: 'Data de fim do período aquisitivo corrente, já ajustada por afastamentos.'
+    comment: 'Data de fim do período aquisitivo corrente.'
   },
   dth_limite_ferias: {
     type: DataTypes.DATE,
-    comment: 'Data limite para o gozo das férias, recalculada com base nos ajustes.'
+    comment: 'Data limite para o gozo das férias.'
   },
   faltas_injustificadas_periodo: {
     type: DataTypes.INTEGER,

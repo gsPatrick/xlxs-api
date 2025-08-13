@@ -107,33 +107,31 @@ const importFromXLSX = async (filePath) => {
             throw new Error(`Nenhum registro válido foi encontrado. Verifique se as colunas estão nomeadas corretamente na planilha e se as datas de admissão estão no formato DD/MM/AAAA.`);
         }
         
-        // ======================================================================
-        // CORREÇÃO DA LÓGICA DE LIMPEZA DO BANCO DE DADOS
-        // ======================================================================
-        console.log('[LOG DB] Limpando dados antigos em cascata a partir de Funcionários...');
-        
-        // Usamos `cascade: true` para que o PostgreSQL apague automaticamente os registros
-        // dependentes em 'ferias' e 'afastamentos' antes de apagar os funcionários.
-        // Isso resolve o erro de restrição de chave estrangeira.
         await Funcionario.destroy({
             where: {},
             truncate: true,
-            cascade: true, // <<< OPÇÃO CORRIGIDA
+            cascade: true,
             transaction: t
         });
         
-        console.log('[LOG DB] Tabelas limpas com sucesso.');
-
-        console.log(`[LOG DB] Inserindo ${funcionariosParaProcessar.length} novos funcionários...`);
-        await Funcionario.bulkCreate(funcionariosParaProcessar, { transaction: t });
+        await Funcionario.bulkCreate(funcionariosParaProcessar, {
+            transaction: t,
+            updateOnDuplicate: Object.values(columnMapping).concat([
+                'periodo_aquisitivo_atual_inicio',
+                'periodo_aquisitivo_atual_fim',
+                'dth_limite_ferias',
+                'saldo_dias_ferias',
+                'status',
+                'faltas_injustificadas_periodo',
+                'afastamento' // Garante que a coluna 'afastamento' seja atualizada se o funcionário já existir
+            ]).filter(field => field !== 'matricula')
+        });
         
-        console.log('[LOG FUNCIONARIO SERVICE] Chamando serviço para gerar planejamento inicial...');
         const anoAtual = new Date().getFullYear();
         await feriasService.distribuirFerias(anoAtual, `Planejamento inicial gerado após importação`, t);
 
         await t.commit();
         
-        console.log(`[LOG FUNCIONARIO SERVICE] SUCESSO! Transação concluída.`);
         fs.unlinkSync(filePath);
         return { message: `Importação concluída! ${funcionariosParaProcessar.length} funcionários cadastrados. ${linhasInvalidas > 0 ? `${linhasInvalidas} linhas foram ignoradas.` : ''}` };
 
@@ -144,7 +142,6 @@ const importFromXLSX = async (filePath) => {
         throw new Error(err.message || "Ocorreu um erro crítico durante a importação.");
     }
 };
-
 /**
  * Busca todos os funcionários com filtros e paginação (SEM CACHE).
  */
