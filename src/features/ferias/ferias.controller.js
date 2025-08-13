@@ -2,14 +2,12 @@
 
 const feriasService = require('./ferias.service');
 
-// Esta função era chamada 'listar' e tentava usar 'listarFerias'
 const findAll = async (req, res) => {
     try {
-        // CORREÇÃO: Chamando a função com o nome correto 'findAll'
         const ferias = await feriasService.findAll(req.query);
         res.status(200).send(ferias);
     } catch (error) {
-        console.error("Erro no controller ao listar férias:", error); // Adicionado log de erro
+        console.error("Erro no controller ao listar férias:", error);
         res.status(500).send({ message: 'Falha ao buscar férias.', error: error.message });
     }
 };
@@ -17,25 +15,37 @@ const findAll = async (req, res) => {
 const distribuir = async (req, res) => {
     try {
         const { ano, descricao } = req.body;
-        // Validação básica dos dados de entrada
         if (!ano || isNaN(parseInt(ano))) {
             return res.status(400).send({ message: 'O ano é obrigatório e deve ser um número.' });
         }
         const resultado = await feriasService.distribuirFerias(parseInt(ano), descricao);
         res.status(200).send(resultado);
     } catch (error) {
-        console.error("Erro no controller ao distribuir férias:", error); // Adicionado log de erro
+        console.error("Erro no controller ao distribuir férias:", error);
         res.status(500).send({ message: 'Falha ao distribuir férias.', error: error.message });
     }
 };
 
-// Adicionando as funções de CRUD que podem estar faltando no seu controlador
 const create = async (req, res) => {
     try {
-        const novaFeria = await feriasService.create(req.body);
+        // =====================================================================
+        // CORREÇÃO: Pega a matrícula dos parâmetros da URL OU do corpo da requisição.
+        // Isso torna o controlador compatível com ambas as rotas:
+        // POST /api/ferias (com matricula_funcionario no body)
+        // POST /api/funcionarios/:matricula/ferias (com matricula nos params)
+        // =====================================================================
+        const matricula = req.params.matricula || req.body.matricula_funcionario;
+        if (!matricula) {
+            return res.status(400).send({ message: 'Matrícula do funcionário é obrigatória.' });
+        }
+        
+        const dadosFerias = { ...req.body, matricula_funcionario: matricula };
+
+        const novaFeria = await feriasService.create(dadosFerias);
         res.status(201).send(novaFeria);
     } catch (error) {
         console.error("Erro no controller ao criar férias:", error);
+        // O erro de validação que você viu (notNull Violation) será capturado aqui
         res.status(500).send({ message: 'Falha ao criar registro de férias.', error: error.message });
     }
 };
