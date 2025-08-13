@@ -30,23 +30,30 @@ const startServer = async () => {
     console.log('Conexão com o banco de dados PostgreSQL estabelecida com sucesso.');
     
     // 2. Sincroniza os modelos
-await db.sequelize.sync({ force: true }); 
+    // ATENÇÃO: `force: true` apaga todas as tabelas e as recria. Use apenas em desenvolvimento.
+    await db.sequelize.sync({ force: true }); 
     console.log('Todos os modelos foram sincronizados com sucesso.');
 
     // 3. SEEDING DO USUÁRIO ADMIN
     const adminEmail = process.env.ADMIN_EMAIL || 'admin@empresa.com';
     const adminPassword = process.env.ADMIN_PASSWORD || 'admin123';
+    // ======================================================================
+    // CORREÇÃO: Adicionado o nome do administrador padrão.
+    // ======================================================================
+    const adminName = 'Administrador Padrão';
 
     // Acessa o modelo User através do objeto db importado
     const adminExists = await db.User.findOne({ where: { email: adminEmail } });
     
     if (!adminExists) {
         await db.User.create({
+            nome: adminName, // <--- CAMPO NOME ADICIONADO AQUI
             email: adminEmail,
             password: adminPassword,
             role: 'admin'
         });
         console.log(`>>> Usuário admin padrão criado:`);
+        console.log(`>>> Nome: ${adminName}`);
         console.log(`>>> E-mail: ${adminEmail}`);
         console.log(`>>> Senha: ${adminPassword}`);
     }
