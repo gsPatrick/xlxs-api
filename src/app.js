@@ -30,7 +30,7 @@ const startServer = async () => {
     console.log('Conexão com o banco de dados PostgreSQL estabelecida com sucesso.');
     
     // 2. Sincroniza os modelos
-    await db.sequelize.sync(); 
+await db.sequelize.sync({ force: true }); 
     console.log('Todos os modelos foram sincronizados com sucesso.');
 
     // 3. SEEDING DO USUÁRIO ADMIN
