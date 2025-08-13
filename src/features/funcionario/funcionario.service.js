@@ -7,28 +7,40 @@ const fs = require('fs');
 const XLSX = require('xlsx');
 const { addYears, addMonths, addDays, differenceInDays, parse } = require('date-fns');
 
-const columnMapping = {
-    'Matrícula': 'matricula',
-    'Nome Funcionário': 'nome_funcionario',
-    'Dth. Admissão': 'dth_admissao',
-    'Categoria_Trabalhador': 'categoria_trabalhador',
-    'Municipio_Local_Trabalho': 'municipio_local_trabalho',
-    'DiasAfastado': 'dias_afastado',
-    'Razão Social Filial': 'razao_social_filial',
-    'Código Filial': 'codigo_filial',
-    'Categoria': 'categoria',
-    'Contrato': 'contrato',
-    'Local De Trabalho': 'local_de_trabalho',
-    'Horário': 'horario',
-    'Afastamento': 'afastamento',
-    'Convenção': 'convencao',
+const normalizeHeader = (header) => {
+    if (!header) return '';
+    return header.toString().toLowerCase().trim()
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // Remove acentos
+        .replace(/[._]/g, '') // Remove pontos e underscores
+        .replace(/\s+/g, ' '); // Normaliza múltiplos espaços para um só
 };
 
-// Função helper para normalizar os nomes das colunas
-const normalizeHeader = (header) => {
-    return header.toString().toLowerCase().trim()
-        .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+// ==========================================================
+// MAPEAMENTO CORRIGIDO COM CHAVES TOTALMENTE NORMALIZADAS
+// ==========================================================
+const columnMapping = {
+    'matricula': 'matricula',
+    'nome funcionario': 'nome_funcionario',
+    'dth admissao': 'dth_admissao', // sem ponto
+    'categoriatrabalhador': 'categoria_trabalhador', // sem underscore
+    'municipiolocaltrabalho': 'municipio_local_trabalho', // sem underscore
+    'diasafastado': 'dias_afastado',
+    'dth ultima ferias': 'dth_ultima_ferias', // sem ponto
+    'dth ultimo planejamento': 'dth_ultimo_planejamento', // sem ponto
+    'dth limite ferias': 'dth_limite_ferias', // sem ponto
+    'dth inicio periodo': 'dth_inicio_periodo', // sem ponto
+    'dth final periodo': 'dth_final_periodo', // sem ponto
+    'qtd dias ferias': 'qtd_dias_ferias', // sem ponto
+    'razao social filial': 'razao_social_filial',
+    'codigo filial': 'codigo_filial',
+    'categoria': 'categoria',
+    'contrato': 'contrato',
+    'local de trabalho': 'local_de_trabalho',
+    'horario': 'horario',
+    'afastamento': 'afastamento',
+    'convencao': 'convencao',
 };
+
 
 const importFromXLSX = async (filePath) => {
     console.log(`[LOG FUNCIONARIO SERVICE] Iniciando processo de importação para: ${filePath}`);
@@ -43,25 +55,17 @@ const importFromXLSX = async (filePath) => {
         
         console.log(`[LOG FUNCIONARIO SERVICE] Planilha lida. ${data.length} linhas de dados encontradas.`);
         
-        // ======================================================================
-        // DEBUG PODEROSO: Logar a primeira linha de dados BRUTA e MAPEADA
-        // Isso nos mostrará as chaves exatas que o XLSX está gerando.
-        // ======================================================================
+        // DEBUG para verificar o cabeçalho normalizado da primeira linha
         if (data.length > 0) {
-            console.log("==================== DEBUG DA PRIMEIRA LINHA ====================");
-            console.log("DADOS BRUTOS DA PRIMEIRA LINHA (ROW):");
-            console.log(data[0]);
-
-            const primeiraLinhaMapeada = {};
-            for (const key in data[0]) {
-                const normalizedKey = normalizeHeader(key);
-                if (columnMapping[normalizedKey]) {
-                    primeiraLinhaMapeada[columnMapping[normalizedKey]] = data[0][key] || null;
-                }
-            }
-            console.log("PRIMEIRA LINHA APÓS MAPEAMENTO:");
-            console.log(primeiraLinhaMapeada);
-            console.log("===============================================================");
+            const firstRowKeys = Object.keys(data[0]);
+            console.log("==================== DEBUG DE MAPEAMENTO ====================");
+            console.log("CHAVE ORIGINAL -> CHAVE NORMALIZADA -> MAPEADO PARA");
+            firstRowKeys.forEach(key => {
+                const normalized = normalizeHeader(key);
+                const mappedTo = columnMapping[normalized] || 'NÃO MAPEADO';
+                console.log(`'${key}' -> '${normalized}' -> ${mappedTo}`);
+            });
+            console.log("==========================================================");
         }
 
         const funcionariosParaProcessar = [];
@@ -111,7 +115,7 @@ const importFromXLSX = async (filePath) => {
         console.log(`[LOG FUNCIONARIO SERVICE] Processamento concluído. ${funcionariosParaProcessar.length} registros válidos. ${linhasInvalidas} linhas inválidas puladas.`);
 
         if (funcionariosParaProcessar.length === 0) {
-            throw new Error(`Nenhum registro válido foi encontrado. Verifique se as colunas "Matrícula" e "Dth. Admissão" (a partir da segunda linha) existem e se as datas estão no formato DD/MM/AAAA. Verifique o log 'DEBUG DA PRIMEIRA LINHA' no console do servidor para ver os nomes exatos das colunas que estão sendo lidas.`);
+            throw new Error(`Nenhum registro válido foi encontrado. Verifique se as colunas estão nomeadas corretamente na planilha e se as datas de admissão estão no formato DD/MM/AAAA.`);
         }
         
         await Ferias.destroy({ where: {}, truncate: true, transaction: t });
