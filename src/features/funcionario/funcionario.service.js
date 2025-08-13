@@ -39,14 +39,30 @@ const importFromXLSX = async (filePath) => {
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
         
-        // ======================================================================
-        // CORREÇÃO CENTRAL: Ignorar a primeira linha da planilha.
-        // A opção `range: 1` diz à biblioteca para começar a ler a partir da segunda linha (índice 1).
-        // A primeira linha (índice 0) será completamente ignorada, e a segunda linha será usada como cabeçalho.
-        // ======================================================================
         const data = XLSX.utils.sheet_to_json(worksheet, { range: 1, raw: false, dateNF: 'dd/MM/yyyy' });
         
-        console.log(`[LOG FUNCIONARIO SERVICE] Planilha lida a partir da segunda linha. ${data.length} linhas de dados encontradas.`);
+        console.log(`[LOG FUNCIONARIO SERVICE] Planilha lida. ${data.length} linhas de dados encontradas.`);
+        
+        // ======================================================================
+        // DEBUG PODEROSO: Logar a primeira linha de dados BRUTA e MAPEADA
+        // Isso nos mostrará as chaves exatas que o XLSX está gerando.
+        // ======================================================================
+        if (data.length > 0) {
+            console.log("==================== DEBUG DA PRIMEIRA LINHA ====================");
+            console.log("DADOS BRUTOS DA PRIMEIRA LINHA (ROW):");
+            console.log(data[0]);
+
+            const primeiraLinhaMapeada = {};
+            for (const key in data[0]) {
+                const normalizedKey = normalizeHeader(key);
+                if (columnMapping[normalizedKey]) {
+                    primeiraLinhaMapeada[columnMapping[normalizedKey]] = data[0][key] || null;
+                }
+            }
+            console.log("PRIMEIRA LINHA APÓS MAPEAMENTO:");
+            console.log(primeiraLinhaMapeada);
+            console.log("===============================================================");
+        }
 
         const funcionariosParaProcessar = [];
         let linhasInvalidas = 0;
@@ -95,24 +111,19 @@ const importFromXLSX = async (filePath) => {
         console.log(`[LOG FUNCIONARIO SERVICE] Processamento concluído. ${funcionariosParaProcessar.length} registros válidos. ${linhasInvalidas} linhas inválidas puladas.`);
 
         if (funcionariosParaProcessar.length === 0) {
-            throw new Error(`Nenhum registro válido foi encontrado na planilha. Verifique se as colunas "Matrícula" e "Dth. Admissão" (a partir da segunda linha) existem e se as datas estão no formato DD/MM/AAAA.`);
+            throw new Error(`Nenhum registro válido foi encontrado. Verifique se as colunas "Matrícula" e "Dth. Admissão" (a partir da segunda linha) existem e se as datas estão no formato DD/MM/AAAA. Verifique o log 'DEBUG DA PRIMEIRA LINHA' no console do servidor para ver os nomes exatos das colunas que estão sendo lidas.`);
         }
         
-        console.log('[LOG DB] Limpando dados antigos...');
         await Ferias.destroy({ where: {}, truncate: true, transaction: t });
         await Afastamento.destroy({ where: {}, truncate: true, transaction: t });
         await Funcionario.destroy({ where: {}, truncate: true, transaction: t });
-
-        console.log(`[LOG DB] Inserindo ${funcionariosParaProcessar.length} novos funcionários...`);
         await Funcionario.bulkCreate(funcionariosParaProcessar, { transaction: t });
         
-        console.log('[LOG FUNCIONARIO SERVICE] Chamando serviço para gerar planejamento inicial...');
         const anoAtual = new Date().getFullYear();
         await feriasService.distribuirFerias(anoAtual, `Planejamento inicial gerado após importação`, t);
 
         await t.commit();
         
-        console.log(`[LOG FUNCIONARIO SERVICE] SUCESSO! Transação concluída.`);
         fs.unlinkSync(filePath);
         return { message: `Importação concluída! ${funcionariosParaProcessar.length} funcionários cadastrados. ${linhasInvalidas > 0 ? `${linhasInvalidas} linhas foram ignoradas.` : ''}` };
 
