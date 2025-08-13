@@ -42,6 +42,8 @@ const columnMapping = {
 };
 
 
+// Dentro do arquivo: src/features/funcionario/funcionario.service.js
+
 const importFromXLSX = async (filePath) => {
     console.log(`[LOG FUNCIONARIO SERVICE] Iniciando processo de importação para: ${filePath}`);
     const t = await sequelize.transaction();
@@ -55,19 +57,6 @@ const importFromXLSX = async (filePath) => {
         
         console.log(`[LOG FUNCIONARIO SERVICE] Planilha lida. ${data.length} linhas de dados encontradas.`);
         
-        // DEBUG para verificar o cabeçalho normalizado da primeira linha
-        if (data.length > 0) {
-            const firstRowKeys = Object.keys(data[0]);
-            console.log("==================== DEBUG DE MAPEAMENTO ====================");
-            console.log("CHAVE ORIGINAL -> CHAVE NORMALIZADA -> MAPEADO PARA");
-            firstRowKeys.forEach(key => {
-                const normalized = normalizeHeader(key);
-                const mappedTo = columnMapping[normalized] || 'NÃO MAPEADO';
-                console.log(`'${key}' -> '${normalized}' -> ${mappedTo}`);
-            });
-            console.log("==========================================================");
-        }
-
         const funcionariosParaProcessar = [];
         let linhasInvalidas = 0;
 
@@ -118,16 +107,33 @@ const importFromXLSX = async (filePath) => {
             throw new Error(`Nenhum registro válido foi encontrado. Verifique se as colunas estão nomeadas corretamente na planilha e se as datas de admissão estão no formato DD/MM/AAAA.`);
         }
         
-        await Ferias.destroy({ where: {}, truncate: true, transaction: t });
-        await Afastamento.destroy({ where: {}, truncate: true, transaction: t });
-        await Funcionario.destroy({ where: {}, truncate: true, transaction: t });
+        // ======================================================================
+        // CORREÇÃO DA LÓGICA DE LIMPEZA DO BANCO DE DADOS
+        // ======================================================================
+        console.log('[LOG DB] Limpando dados antigos em cascata a partir de Funcionários...');
+        
+        // Usamos `cascade: true` para que o PostgreSQL apague automaticamente os registros
+        // dependentes em 'ferias' e 'afastamentos' antes de apagar os funcionários.
+        // Isso resolve o erro de restrição de chave estrangeira.
+        await Funcionario.destroy({
+            where: {},
+            truncate: true,
+            cascade: true, // <<< OPÇÃO CORRIGIDA
+            transaction: t
+        });
+        
+        console.log('[LOG DB] Tabelas limpas com sucesso.');
+
+        console.log(`[LOG DB] Inserindo ${funcionariosParaProcessar.length} novos funcionários...`);
         await Funcionario.bulkCreate(funcionariosParaProcessar, { transaction: t });
         
+        console.log('[LOG FUNCIONARIO SERVICE] Chamando serviço para gerar planejamento inicial...');
         const anoAtual = new Date().getFullYear();
         await feriasService.distribuirFerias(anoAtual, `Planejamento inicial gerado após importação`, t);
 
         await t.commit();
         
+        console.log(`[LOG FUNCIONARIO SERVICE] SUCESSO! Transação concluída.`);
         fs.unlinkSync(filePath);
         return { message: `Importação concluída! ${funcionariosParaProcessar.length} funcionários cadastrados. ${linhasInvalidas > 0 ? `${linhasInvalidas} linhas foram ignoradas.` : ''}` };
 
