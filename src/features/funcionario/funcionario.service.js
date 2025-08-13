@@ -1,7 +1,8 @@
 // src/features/funcionario/funcionario.service.js
 
 const { Op } = require('sequelize');
-const { Funcionario, Ferias, Afastamento, sequelize } = require('../../models'); // Adicionar sequelize para transações
+const { Funcionario, Ferias, Afastamento, sequelize } = require('../../models');
+const feriasService = require('../ferias/ferias.service');
 const fs = require('fs');
 const XLSX = require('xlsx');
 const { addYears, addMonths, addDays, differenceInDays, parse } = require('date-fns');
@@ -28,22 +29,19 @@ const columnMapping = {
  * e insere os novos dados aplicando as regras de negócio.
  */
 const importFromXLSX = async (filePath) => {
-    console.log(`[LOG SERVICE] Iniciando processo de importação com RESET para o arquivo: ${filePath}`);
-    
-    // Inicia uma transação gerenciada pelo Sequelize
+    console.log(`[LOG FUNCIONARIO SERVICE] Iniciando processo de importação com RESET para o arquivo: ${filePath}`);
     const t = await sequelize.transaction();
 
     try {
-        // --- ETAPA 1: LER E PROCESSAR A PLANILHA ---
         const workbook = XLSX.readFile(filePath);
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
         const data = XLSX.utils.sheet_to_json(worksheet, { raw: false, dateNF: 'dd/MM/yyyy' });
         
-        console.log(`[LOG SERVICE] Planilha lida. ${data.length} linhas encontradas.`);
+        console.log(`[LOG FUNCIONARIO SERVICE] Planilha lida. ${data.length} linhas encontradas.`);
 
         const funcionariosParaProcessar = [];
-        for (const [index, row] of data.entries()) {
+        for (const row of data) {
             const funcionarioMapeado = {};
             for (const key in row) {
                 const trimmedKey = key.trim();
@@ -52,16 +50,10 @@ const importFromXLSX = async (filePath) => {
                 }
             }
             
-            if (!funcionarioMapeado.matricula || !funcionarioMapeado.dth_admissao) {
-                console.warn(`[AVISO SERVICE] Linha ${index + 2}: Matrícula ou Admissão ausentes. Pulando.`);
-                continue;
-            }
+            if (!funcionarioMapeado.matricula || !funcionarioMapeado.dth_admissao) continue;
 
             const admissao = parse(funcionarioMapeado.dth_admissao, 'dd/MM/yyyy', new Date());
-            if (isNaN(admissao.getTime())) {
-                console.warn(`[AVISO SERVICE] Matrícula ${funcionarioMapeado.matricula}: Data de admissão inválida. Pulando.`);
-                continue;
-            }
+            if (isNaN(admissao.getTime())) continue;
             funcionarioMapeado.dth_admissao = admissao;
 
             const hoje = new Date();
@@ -71,7 +63,6 @@ const importFromXLSX = async (filePath) => {
             
             const inicioPeriodo = ultimoAniversario;
             let fimPeriodo = addDays(addYears(inicioPeriodo, 1), -1);
-
             const diasAfastadoSuspensao = parseInt(funcionarioMapeado.dias_afastado, 10) || 0;
             if (diasAfastadoSuspensao > 0) fimPeriodo = addDays(fimPeriodo, diasAfastadoSuspensao);
 
@@ -89,36 +80,36 @@ const importFromXLSX = async (filePath) => {
             throw new Error("Nenhum registro válido foi encontrado na planilha.");
         }
         
-        console.log(`[LOG SERVICE] Processamento de regras de negócio concluído. ${funcionariosParaProcessar.length} funcionários prontos para inserção.`);
-
-        // --- ETAPA 2: LIMPAR DADOS ANTIGOS (DENTRO DA TRANSAÇÃO) ---
+        console.log(`[LOG FUNCIONARIO SERVICE] Processamento de regras de negócio concluído.`);
         console.log('[LOG DB] Limpando dados antigos (Férias, Afastamentos, Funcionários)...');
-        // A ordem é importante devido às restrições de chave estrangeira
         await Ferias.destroy({ where: {}, truncate: true, transaction: t });
         await Afastamento.destroy({ where: {}, truncate: true, transaction: t });
         await Funcionario.destroy({ where: {}, truncate: true, transaction: t });
         console.log('[LOG DB] Tabelas limpas com sucesso.');
 
-        // --- ETAPA 3: INSERIR NOVOS DADOS (DENTRO DA TRANSAÇÃO) ---
         console.log(`[LOG DB] Inserindo ${funcionariosParaProcessar.length} novos registros de funcionários...`);
         await Funcionario.bulkCreate(funcionariosParaProcessar, { transaction: t });
         
-        // --- ETAPA 4: COMMIT DA TRANSAÇÃO ---
+        console.log('[LOG FUNCIONARIO SERVICE] Chamando o serviço para gerar o planejamento de férias inicial...');
+        const anoAtual = new Date().getFullYear();
+        await feriasService.distribuirFerias(
+            anoAtual, 
+            `Planejamento inicial gerado após importação em ${new Date().toLocaleDateString('pt-BR')}`, 
+            t
+        );
+        console.log('[LOG FUNCIONARIO SERVICE] Planejamento inicial gerado com sucesso.');
+
         await t.commit();
         
-        console.log(`[LOG SERVICE] SUCESSO! Transação concluída. ${funcionariosParaProcessar.length} registros foram salvos.`);
-        
-        fs.unlinkSync(filePath); // Limpa o arquivo temporário
-        return { message: `Importação concluída com sucesso! ${funcionariosParaProcessar.length} funcionários foram cadastrados e os dados antigos foram substituídos.` };
+        console.log(`[LOG FUNCIONARIO SERVICE] SUCESSO! Transação concluída.`);
+        fs.unlinkSync(filePath);
+        return { message: `Importação concluída! ${funcionariosParaProcessar.length} funcionários cadastrados e o planejamento de férias inicial foi gerado.` };
 
     } catch (err) {
-        // --- ETAPA 5: ROLLBACK EM CASO DE ERRO ---
         await t.rollback();
-        console.error("[ERRO FATAL SERVICE] A transação foi revertida. Nenhum dado foi alterado.", err);
-        if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
-        }
-        throw new Error("Ocorreu um erro crítico durante a importação. O banco de dados foi restaurado ao estado anterior. Verifique os logs.");
+        console.error("[ERRO FATAL SERVICE] A transação foi revertida. Nenhum dado foi alterado no banco.", err);
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        throw new Error("Ocorreu um erro crítico durante a importação. O banco de dados foi restaurado ao estado anterior. Verifique os logs do servidor para mais detalhes.");
     }
 };
 
@@ -206,8 +197,6 @@ const remove = async (matricula) => {
 
 /**
  * Exporta a lista de funcionários para XLSX.
- * NOTA: Esta função exporta TODOS os funcionários, sem filtros.
- * A exportação com filtros é feita pelo `relatorios.service.js`.
  */
 const exportAllToXLSX = async () => {
   const funcionarios = await Funcionario.findAll({ raw: true });
@@ -219,11 +208,11 @@ const exportAllToXLSX = async () => {
 };
 
 module.exports = {
-  exportAllToXLSX,
-  create,
+  importFromXLSX,
   findAll,
+  create,
   findOne,
   update,
   remove,
-  importFromXLSX
+  exportAllToXLSX,
 };
