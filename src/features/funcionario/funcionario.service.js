@@ -43,7 +43,12 @@ const importFromXLSX = async (filePath) => {
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
         
-        const data = XLSX.utils.sheet_to_json(worksheet, { raw: false, dateNF: 'dd/MM/yyyy' });
+        // ==========================================================
+        // CORREÇÃO APLICADA AQUI: Adicionado `{ range: 1 }`
+        // Isso instrui a biblioteca a ignorar a primeira linha (o título)
+        // e usar a segunda linha como cabeçalho.
+        // ==========================================================
+        const data = XLSX.utils.sheet_to_json(worksheet, { range: 1, raw: false, dateNF: 'dd/MM/yyyy' });
         
         console.log(`[LOG FUNCIONARIO SERVICE] Planilha lida. ${data.length} linhas de dados encontradas.`);
         
@@ -51,10 +56,9 @@ const importFromXLSX = async (filePath) => {
         let linhasInvalidas = 0;
         const matriculasDaPlanilha = new Set();
 
-        // NOVO: Loop para iterar com índice para logs mais claros
         for (let i = 0; i < data.length; i++) {
             const row = data[i];
-            const linhaNumero = i + 2; // +2 porque o sheet_to_json pula o cabeçalho e o índice é 0-based
+            const linhaNumero = i + 2;
 
             const funcionarioMapeado = {};
             for (const key in row) {
@@ -63,14 +67,12 @@ const importFromXLSX = async (filePath) => {
                     funcionarioMapeado[columnMapping[normalizedKey]] = row[key] || null;
                 }
             }
-
-            // NOVO: Log de diagnóstico para as 5 primeiras linhas para depuração
+            
             if (i < 5) {
                 console.log(`[DIAGNÓSTICO LINHA ${linhaNumero}] Dados Brutos:`, row);
                 console.log(`[DIAGNÓSTICO LINHA ${linhaNumero}] Dados Mapeados:`, funcionarioMapeado);
             }
             
-            // ALTERADO: Validação com log específico
             if (!funcionarioMapeado.matricula || !funcionarioMapeado.dth_admissao) {
                 console.warn(`[AVISO SERVICE] Linha ${linhaNumero} pulada: Matrícula ou Data de Admissão não encontradas. Verifique os nomes das colunas na planilha.`);
                 linhasInvalidas++;
@@ -84,7 +86,6 @@ const importFromXLSX = async (filePath) => {
                     const dataString = String(funcionarioMapeado[campoData]);
                     const dataObj = parse(dataString, 'dd/MM/yyyy', new Date());
                     if (isNaN(dataObj.getTime())) {
-                        // ALTERADO: Log de erro de data específico
                         console.warn(`[AVISO SERVICE] Linha ${linhaNumero} pulada: Formato de data inválido no campo '${campoData}'. Valor encontrado: '${dataString}'. Esperado: 'dd/MM/yyyy'.`);
                         dataInvalida = true;
                         break;
@@ -112,7 +113,6 @@ const importFromXLSX = async (filePath) => {
         
         console.log(`[LOG FUNCIONARIO SERVICE] Processamento concluído. ${funcionariosParaProcessar.length} registros válidos. ${linhasInvalidas} linhas inválidas puladas.`);
 
-        // ALTERADO: Mensagem de erro mais detalhada
         if (funcionariosParaProcessar.length === 0) {
             throw new Error(`Nenhum registro válido foi encontrado em ${data.length} linhas. Verifique os logs de [AVISO SERVICE] no terminal para ver os motivos exatos pelos quais as linhas foram puladas (nomes de coluna ou formato de data incorretos).`);
         }
