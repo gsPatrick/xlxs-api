@@ -43,11 +43,6 @@ const importFromXLSX = async (filePath) => {
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
         
-        // ==========================================================
-        // CORREÇÃO APLICADA AQUI: Adicionado `{ range: 1 }`
-        // Isso instrui a biblioteca a ignorar a primeira linha (o título)
-        // e usar a segunda linha como cabeçalho.
-        // ==========================================================
         const data = XLSX.utils.sheet_to_json(worksheet, { range: 1, raw: false, dateNF: 'dd/MM/yyyy' });
         
         console.log(`[LOG FUNCIONARIO SERVICE] Planilha lida. ${data.length} linhas de dados encontradas.`);
@@ -141,12 +136,19 @@ const importFromXLSX = async (filePath) => {
             desativados = updateCount;
             console.log(`[LOG FUNCIONARIO SERVICE] ${desativados} funcionários foram desativados por não estarem na planilha.`);
         }
+        
+        // ==========================================================
+        // CORREÇÃO APLICADA AQUI: Reativando a distribuição automática de férias.
+        // O sistema agora irá criar o planejamento logo após a importação.
+        // ==========================================================
+        const anoAtual = new Date().getFullYear();
+        await feriasService.distribuirFerias(anoAtual, `Planejamento gerado após importação`, t);
 
         await t.commit();
         
         fs.unlinkSync(filePath);
         return { 
-            message: `Importação concluída! ${funcionariosParaProcessar.length} funcionários processados (criados/atualizados). ${desativados} funcionários foram marcados como inativos. ${linhasInvalidas > 0 ? `${linhasInvalidas} linhas foram ignoradas.` : ''}` 
+            message: `Importação concluída! ${funcionariosParaProcessar.length} funcionários processados (criados/atualizados). ${desativados} funcionários foram marcados como inativos. Um novo planejamento de férias foi gerado.` 
         };
 
     } catch (err) {
