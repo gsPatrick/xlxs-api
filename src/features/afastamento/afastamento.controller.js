@@ -2,13 +2,25 @@
 
 const afastamentoService = require('./afastamento.service');
 
+// ==========================================================
+// NOVO CONTROLLER (SEÇÃO 2.A DO PDF)
+// ==========================================================
+const findAllActive = async (req, res) => {
+    try {
+        const resultado = await afastamentoService.findAllActive(req.query);
+        res.status(200).send(resultado);
+    } catch (error) {
+        console.error('Erro no controller ao listar afastamentos ativos:', error);
+        res.status(500).send({ message: 'Falha ao buscar afastamentos.', error: error.message });
+    }
+};
+
 // Cria um novo afastamento para um funcionário
 const create = async (req, res) => {
   try {
     const { matricula } = req.params;
     const dadosAfastamento = req.body;
     
-    // Adiciona a matrícula do funcionário aos dados para garantir a associação correta
     dadosAfastamento.matricula_funcionario = matricula;
 
     const novoAfastamento = await afastamentoService.create(dadosAfastamento);
@@ -59,6 +71,7 @@ const remove = async (req, res) => {
 };
 
 module.exports = {
+  findAllActive, // Exporta o novo controller
   create,
   findOne,
   update,

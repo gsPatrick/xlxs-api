@@ -1,8 +1,67 @@
 // src/features/afastamento/afastamento.service.js
 
 const { Afastamento, Funcionario } = require('../../models');
-// Importar o serviço de férias para usar a função de recálculo
+const { Op } = require('sequelize');
 const feriasService = require('../ferias/ferias.service');
+
+// ==========================================================
+// NOVA FUNÇÃO (SEÇÃO 2.A DO PDF)
+// ==========================================================
+/**
+ * Busca todos os afastamentos ativos com filtros e paginação.
+ * @param {object} queryParams - Parâmetros da query para filtragem e paginação.
+ * @returns {Promise<object>} Lista paginada de afastamentos.
+ */
+const findAllActive = async (queryParams) => {
+    const page = parseInt(queryParams.page, 10) || 1;
+    const limit = parseInt(queryParams.limit, 10) || 20;
+    const offset = (page - 1) * limit;
+
+    const whereFuncionario = {};
+    if (queryParams.busca) {
+        whereFuncionario[Op.or] = [
+            { nome_funcionario: { [Op.iLike]: `%${queryParams.busca}%` } },
+            { matricula: { [Op.iLike]: `%${queryParams.busca}%` } }
+        ];
+    }
+    if (queryParams.municipio) { 
+        whereFuncionario.municipio_local_trabalho = queryParams.municipio; 
+    }
+    if (queryParams.grupoContrato) {
+        whereFuncionario.des_grupo_contrato = queryParams.grupoContrato;
+    }
+    if (queryParams.categoria) {
+        whereFuncionario.categoria = queryParams.categoria;
+    }
+    if (queryParams.tipoContrato) {
+        whereFuncionario.categoria_trab = queryParams.tipoContrato;
+    }
+    
+    const { count, rows } = await Afastamento.findAndCountAll({
+        where: {
+            // Filtra por afastamentos que ainda não terminaram ou não têm data de fim
+            [Op.or]: [
+                { data_fim: { [Op.is]: null } },
+                { data_fim: { [Op.gte]: new Date() } }
+            ]
+        },
+        include: [{
+            model: Funcionario,
+            where: whereFuncionario,
+            required: true
+        }],
+        order: [['data_inicio', 'DESC']],
+        limit,
+        offset,
+    });
+
+    const totalPages = Math.ceil(count / limit);
+    return {
+        data: rows,
+        pagination: { totalItems: count, totalPages, currentPage: page, limit }
+    };
+};
+
 
 /**
  * Cria um novo registro de afastamento para um funcionário.
@@ -10,17 +69,13 @@ const feriasService = require('../ferias/ferias.service');
  * @returns {Promise<object>} O objeto do afastamento criado.
  */
 const create = async (dadosAfastamento) => {
-  // Validação: Verifica se o funcionário existe antes de criar o afastamento
   const funcionario = await Funcionario.findByPk(dadosAfastamento.matricula_funcionario);
   if (!funcionario) {
     throw new Error('Funcionário não encontrado para associar o afastamento.');
   }
 
   const novoAfastamento = await Afastamento.create(dadosAfastamento);
-
-  // Aciona a lógica de regras de negócio para recalcular o período de férias
   await feriasService.recalcularPeriodoAquisitivo(dadosAfastamento.matricula_funcionario);
-
   return novoAfastamento;
 };
 
@@ -47,10 +102,7 @@ const update = async (id, dadosParaAtualizar) => {
   }
 
   await afastamento.update(dadosParaAtualizar);
-
-  // Aciona a lógica de regras de negócio para recalcular o período de férias
   await feriasService.recalcularPeriodoAquisitivo(afastamento.matricula_funcionario);
-
   return afastamento;
 };
 
@@ -67,14 +119,12 @@ const remove = async (id) => {
 
   const matricula = afastamento.matricula_funcionario;
   await afastamento.destroy();
-
-  // Aciona a lógica de regras de negócio para recalcular o período de férias
   await feriasService.recalcularPeriodoAquisitivo(matricula);
-
   return { message: 'Afastamento removido com sucesso.' };
 };
 
 module.exports = {
+  findAllActive, // Exporta a nova função
   create,
   findOne,
   update,

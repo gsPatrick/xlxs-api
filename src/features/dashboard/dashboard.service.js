@@ -72,7 +72,6 @@ const getSummaryData = async () => {
     // DADOS PARA GRÁFICOS (DISTRIBUIÇÃO MENSAL)
     // =================================================================
 
-    // Contagem de funcionários que INICIAM férias em cada mês do ano atual (do planejamento ativo)
     let distribuicaoMensal = [];
     if (planejamentoAtivo) {
         const feriasDoAno = await Ferias.findAll({
@@ -83,7 +82,7 @@ const getSummaryData = async () => {
                 }
             },
             attributes: [
-                [fn('to_char', col('data_inicio'), 'MM'), 'mes'], // Extrai o mês como '01', '02', etc.
+                [fn('to_char', col('data_inicio'), 'MM'), 'mes'],
                 [fn('count', col('id')), 'total']
             ],
             group: ['mes'],
@@ -91,7 +90,6 @@ const getSummaryData = async () => {
             raw: true
         });
         
-        // Mapeia os resultados para um formato amigável para gráficos
         const mesesDoAno = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
         distribuicaoMensal = mesesDoAno.map((nomeMes, index) => {
             const mesNumero = String(index + 1).padStart(2, '0');
@@ -104,7 +102,6 @@ const getSummaryData = async () => {
     }
 
 
-    // Monta o objeto final da resposta
     return {
         cardsPrincipais: {
             totalFuncionarios,
@@ -115,7 +112,7 @@ const getSummaryData = async () => {
         itensDeAcao: [
             { title: 'Férias Vencidas', count: feriasVencidas, link: '/funcionarios?filtro=vencidas', variant: 'danger' },
             { title: 'Risco Iminente (30 dias)', count: riscoIminente, link: '/funcionarios?filtro=risco_iminente', variant: 'warning' },
-            { title: 'A Vencer (31-90 dias)', count: riscoMedioPrazo, link: '/funcionarios?filtro=risco_medio', variant: 'info' }, // Adicionado novo filtro
+            { title: 'A Vencer (31-90 dias)', count: riscoMedioPrazo, link: '/funcionarios?filtro=risco_medio', variant: 'info' },
             { title: 'Solicitações Pendentes', count: solicitacoesPendentes, link: '/planejamento?filtro=pendentes', variant: 'neutral' },
         ],
         distribuicaoMensal

@@ -18,6 +18,7 @@ const distribuir = async (req, res) => {
         if (!ano || isNaN(parseInt(ano))) {
             return res.status(400).send({ message: 'O ano é obrigatório e deve ser um número.' });
         }
+        // O resultado agora contém { message, registrosCriados, funcionariosExcluidos }
         const resultado = await feriasService.distribuirFerias(parseInt(ano), descricao);
         res.status(200).send(resultado);
     } catch (error) {

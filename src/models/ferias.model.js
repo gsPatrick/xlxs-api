@@ -2,8 +2,6 @@
 
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/sequelize-instance');
-// REMOVA a importação de Planejamento, pois o relacionamento será definido no index.js
-// const Planejamento = require('./planejamento.model');
 
 const Ferias = sequelize.define('Ferias', {
   id: {
@@ -43,14 +41,19 @@ const Ferias = sequelize.define('Ferias', {
     type: DataTypes.TEXT,
     allowNull: true,
     comment: 'Campo para justificativas (ex: motivo da recusa).'
+  },
+  // ==========================================================
+  // NOVO CAMPO ADICIONADO (SEÇÃO 4.B DO PDF)
+  // ==========================================================
+  necessidade_substituicao: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+    comment: 'Indica se o colaborador precisa ser substituído durante as férias.'
   }
 }, {
   tableName: 'ferias',
   comment: 'Armazena os períodos de férias agendados ou gozados.'
 });
-
-// REMOVA ESTAS LINHAS DE ASSOCIAÇÃO DAQUI
-// Planejamento.hasMany(Ferias, { foreignKey: 'planejamentoId', as: 'itensDeFerias' });
-// Ferias.belongsTo(Planejamento, { foreignKey: 'planejamentoId' });
 
 module.exports = Ferias;

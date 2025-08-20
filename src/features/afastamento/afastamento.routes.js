@@ -5,9 +5,16 @@ const afastamentoController = require('./afastamento.controller');
 
 const router = express.Router();
 
+// ==========================================================
+// NOVA ROTA (SEÇÃO 2.A DO PDF)
+// ==========================================================
+// GET /api/afastamentos -> Lista todos os afastamentos ativos, com filtros
+router.get('/', afastamentoController.findAllActive);
+
+
 // --- Rotas para um afastamento específico, identificado pelo seu ID ---
 
-// GET /api/afastamentos/:id -> Busca um afastamento específico (pouco usado, mas bom ter)
+// GET /api/afastamentos/:id -> Busca um afastamento específico
 router.get('/:id', afastamentoController.findOne);
 
 // PUT /api/afastamentos/:id -> Atualiza um afastamento existente

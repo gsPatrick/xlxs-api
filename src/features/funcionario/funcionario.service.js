@@ -5,44 +5,34 @@ const { Funcionario, Ferias, Afastamento, sequelize } = require('../../models');
 const feriasService = require('../ferias/ferias.service');
 const fs = require('fs');
 const XLSX = require('xlsx');
-const { addYears, addMonths, addDays, differenceInDays, parse } = require('date-fns');
+const { parse, addDays } = require('date-fns'); // Adicionar 'addDays' para os filtros de risco
 
 const normalizeHeader = (header) => {
     if (!header) return '';
     return header.toString().toLowerCase().trim()
         .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // Remove acentos
         .replace(/[._]/g, '') // Remove pontos e underscores
-        .replace(/\s+/g, ' '); // Normaliza múltiplos espaços para um só
+        .replace(/\s+/g, ''); // Remove TODOS os espaços para um match mais robusto
 };
 
-// ==========================================================
-// MAPEAMENTO CORRIGIDO COM CHAVES TOTALMENTE NORMALIZADAS
-// ==========================================================
 const columnMapping = {
     'matricula': 'matricula',
-    'nome funcionario': 'nome_funcionario',
-    'dth admissao': 'dth_admissao', // sem ponto
-    'categoriatrabalhador': 'categoria_trabalhador', // sem underscore
-    'municipiolocaltrabalho': 'municipio_local_trabalho', // sem underscore
-    'diasafastado': 'dias_afastado',
-    'dth ultima ferias': 'dth_ultima_ferias', // sem ponto
-    'dth ultimo planejamento': 'dth_ultimo_planejamento', // sem ponto
-    'dth limite ferias': 'dth_limite_ferias', // sem ponto
-    'dth inicio periodo': 'dth_inicio_periodo', // sem ponto
-    'dth final periodo': 'dth_final_periodo', // sem ponto
-    'qtd dias ferias': 'qtd_dias_ferias', // sem ponto
-    'razao social filial': 'razao_social_filial',
-    'codigo filial': 'codigo_filial',
+    'nomefuncionario': 'nome_funcionario',
+    'dthadmissao': 'dth_admissao',
+    'proximoperiodoaquisitivoinicio': 'periodo_aquisitivo_atual_inicio',
+    'proximoperiodoaquisitivofinal': 'periodo_aquisitivo_atual_fim',
+    'datalimite': 'dth_limite_ferias',
     'categoria': 'categoria',
-    'contrato': 'contrato',
-    'local de trabalho': 'local_de_trabalho',
+    'categoriatrab': 'categoria_trab',
     'horario': 'horario',
-    'afastamento': 'afastamento',
+    'escala': 'escala',
+    'siglalocal': 'sigla_local',
+    'desgrupocontrato': 'des_grupo_contrato',
+    'idgrupocontrato': 'id_grupo_contrato',
     'convencao': 'convencao',
+    'situacaoferiasafastamentohoje': 'situacao_ferias_afastamento_hoje',
+    'qtdfaltas': 'faltas_injustificadas_periodo'
 };
-
-
-// Dentro do arquivo: src/features/funcionario/funcionario.service.js
 
 const importFromXLSX = async (filePath) => {
     console.log(`[LOG FUNCIONARIO SERVICE] Iniciando processo de importação para: ${filePath}`);
@@ -53,12 +43,13 @@ const importFromXLSX = async (filePath) => {
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
         
-        const data = XLSX.utils.sheet_to_json(worksheet, { range: 1, raw: false, dateNF: 'dd/MM/yyyy' });
+        const data = XLSX.utils.sheet_to_json(worksheet, { raw: false, dateNF: 'dd/MM/yyyy' });
         
         console.log(`[LOG FUNCIONARIO SERVICE] Planilha lida. ${data.length} linhas de dados encontradas.`);
         
         const funcionariosParaProcessar = [];
         let linhasInvalidas = 0;
+        const matriculasDaPlanilha = new Set();
 
         for (const row of data) {
             const funcionarioMapeado = {};
@@ -74,66 +65,73 @@ const importFromXLSX = async (filePath) => {
                 continue;
             }
 
-            const admissao = parse(String(funcionarioMapeado.dth_admissao), 'dd/MM/yyyy', new Date());
-            if (isNaN(admissao.getTime())) {
+            const datasParaConverter = ['dth_admissao', 'periodo_aquisitivo_atual_inicio', 'periodo_aquisitivo_atual_fim', 'dth_limite_ferias'];
+            let dataInvalida = false;
+            for(const campoData of datasParaConverter) {
+                if (funcionarioMapeado[campoData]) {
+                    const dataObj = parse(String(funcionarioMapeado[campoData]), 'dd/MM/yyyy', new Date());
+                    if (isNaN(dataObj.getTime())) {
+                        dataInvalida = true;
+                        break;
+                    }
+                    funcionarioMapeado[campoData] = dataObj;
+                }
+            }
+            if(dataInvalida) {
                 linhasInvalidas++;
                 continue;
             }
-            funcionarioMapeado.dth_admissao = admissao;
-
-            const hoje = new Date();
-            const anosDeEmpresa = differenceInDays(hoje, admissao) / 365.25;
-            let ultimoAniversario = addYears(admissao, Math.floor(anosDeEmpresa));
-            if (ultimoAniversario > hoje) ultimoAniversario = addYears(ultimoAniversario, -1);
             
-            const inicioPeriodo = ultimoAniversario;
-            let fimPeriodo = addDays(addYears(inicioPeriodo, 1), -1);
-            const diasAfastadoSuspensao = parseInt(funcionarioMapeado.dias_afastado, 10) || 0;
-            if (diasAfastadoSuspensao > 0) fimPeriodo = addDays(fimPeriodo, diasAfastadoSuspensao);
+            const faltas = parseInt(funcionarioMapeado.faltas_injustificadas_periodo, 10) || 0;
+            if (faltas <= 5) funcionarioMapeado.saldo_dias_ferias = 30;
+            else if (faltas >= 6 && faltas <= 14) funcionarioMapeado.saldo_dias_ferias = 24;
+            else if (faltas >= 15 && faltas <= 23) funcionarioMapeado.saldo_dias_ferias = 18;
+            else if (faltas >= 24 && faltas <= 32) funcionarioMapeado.saldo_dias_ferias = 12;
+            else funcionarioMapeado.saldo_dias_ferias = 0;
 
-            funcionarioMapeado.periodo_aquisitivo_atual_inicio = inicioPeriodo;
-            funcionarioMapeado.periodo_aquisitivo_atual_fim = fimPeriodo;
-            funcionarioMapeado.dth_limite_ferias = addMonths(fimPeriodo, 11);
-            funcionarioMapeado.saldo_dias_ferias = 30;
-            funcionarioMapeado.faltas_injustificadas_periodo = 0;
             funcionarioMapeado.status = 'Ativo';
             
             funcionariosParaProcessar.push(funcionarioMapeado);
+            matriculasDaPlanilha.add(funcionarioMapeado.matricula);
         }
         
         console.log(`[LOG FUNCIONARIO SERVICE] Processamento concluído. ${funcionariosParaProcessar.length} registros válidos. ${linhasInvalidas} linhas inválidas puladas.`);
 
         if (funcionariosParaProcessar.length === 0) {
-            throw new Error(`Nenhum registro válido foi encontrado. Verifique se as colunas estão nomeadas corretamente na planilha e se as datas de admissão estão no formato DD/MM/AAAA.`);
+            throw new Error(`Nenhum registro válido foi encontrado. Verifique a planilha.`);
         }
-        
-        await Funcionario.destroy({
-            where: {},
-            truncate: true,
-            cascade: true,
-            transaction: t
-        });
         
         await Funcionario.bulkCreate(funcionariosParaProcessar, {
             transaction: t,
             updateOnDuplicate: Object.values(columnMapping).concat([
-                'periodo_aquisitivo_atual_inicio',
-                'periodo_aquisitivo_atual_fim',
-                'dth_limite_ferias',
                 'saldo_dias_ferias',
-                'status',
-                'faltas_injustificadas_periodo',
-                'afastamento' // Garante que a coluna 'afastamento' seja atualizada se o funcionário já existir
+                'status'
             ]).filter(field => field !== 'matricula')
         });
         
-        const anoAtual = new Date().getFullYear();
-        await feriasService.distribuirFerias(anoAtual, `Planejamento inicial gerado após importação`, t);
+        console.log(`[LOG FUNCIONARIO SERVICE] ${funcionariosParaProcessar.length} funcionários criados ou atualizados.`);
+        
+        const funcionariosNoBanco = await Funcionario.findAll({ attributes: ['matricula'], where: { status: 'Ativo' }, transaction: t, raw: true });
+        const matriculasParaDesativar = funcionariosNoBanco
+            .map(f => f.matricula)
+            .filter(m => !matriculasDaPlanilha.has(m));
+            
+        let desativados = 0;
+        if(matriculasParaDesativar.length > 0) {
+            const [updateCount] = await Funcionario.update(
+                { status: 'Inativo' },
+                { where: { matricula: { [Op.in]: matriculasParaDesativar } }, transaction: t }
+            );
+            desativados = updateCount;
+            console.log(`[LOG FUNCIONARIO SERVICE] ${desativados} funcionários foram desativados por não estarem na planilha.`);
+        }
 
         await t.commit();
         
         fs.unlinkSync(filePath);
-        return { message: `Importação concluída! ${funcionariosParaProcessar.length} funcionários cadastrados. ${linhasInvalidas > 0 ? `${linhasInvalidas} linhas foram ignoradas.` : ''}` };
+        return { 
+            message: `Importação concluída! ${funcionariosParaProcessar.length} funcionários processados (criados/atualizados). ${desativados} funcionários foram marcados como inativos. ${linhasInvalidas > 0 ? `${linhasInvalidas} linhas foram ignoradas.` : ''}` 
+        };
 
     } catch (err) {
         await t.rollback();
@@ -142,8 +140,12 @@ const importFromXLSX = async (filePath) => {
         throw new Error(err.message || "Ocorreu um erro crítico durante a importação.");
     }
 };
+
+// ==========================================================
+// ALTERADO: Função `findAll` expandida com novos filtros
+// ==========================================================
 /**
- * Busca todos os funcionários com filtros e paginação (SEM CACHE).
+ * Busca todos os funcionários com filtros e paginação.
  */
 const findAll = async (queryParams) => {
     const page = parseInt(queryParams.page, 10) || 1;
@@ -151,14 +153,35 @@ const findAll = async (queryParams) => {
     const offset = (page - 1) * limit;
 
     const whereClause = {};
+
+    // Filtro de busca genérico
     if (queryParams.busca) {
         whereClause[Op.or] = [
             { nome_funcionario: { [Op.iLike]: `%${queryParams.busca}%` } },
             { matricula: { [Op.iLike]: `%${queryParams.busca}%` } }
         ];
     }
-    if (queryParams.status) { whereClause.status = queryParams.status; }
-    if (queryParams.municipio) { whereClause.municipio_local_trabalho = queryParams.municipio; }
+
+    // Filtro por status
+    if (queryParams.status) { 
+        whereClause.status = queryParams.status; 
+    }
+    
+    // NOVO: Filtros específicos solicitados no PDF
+    if (queryParams.municipio) { 
+        whereClause.municipio_local_trabalho = queryParams.municipio; 
+    }
+    if (queryParams.grupoContrato) {
+        whereClause.des_grupo_contrato = queryParams.grupoContrato;
+    }
+    if (queryParams.categoria) {
+        whereClause.categoria = queryParams.categoria;
+    }
+    if (queryParams.tipoContrato) { // Corresponde a "Categoria do Trabalhador"
+        whereClause.categoria_trab = queryParams.tipoContrato;
+    }
+
+    // Filtros de Risco (existentes)
     if (queryParams.filtro) {
         const hoje = new Date();
         if (queryParams.filtro === 'vencidas') {
