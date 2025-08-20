@@ -5,14 +5,14 @@ const { Funcionario, Ferias, Afastamento, sequelize } = require('../../models');
 const feriasService = require('../ferias/ferias.service');
 const fs = require('fs');
 const XLSX = require('xlsx');
-const { parse, addDays } = require('date-fns'); // Adicionar 'addDays' para os filtros de risco
+const { parse, addDays } = require('date-fns');
 
 const normalizeHeader = (header) => {
     if (!header) return '';
     return header.toString().toLowerCase().trim()
         .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // Remove acentos
         .replace(/[._]/g, '') // Remove pontos e underscores
-        .replace(/\s+/g, ''); // Remove TODOS os espaços para um match mais robusto
+        .replace(/\s+/g, ''); // Remove TODOS os espaços
 };
 
 const columnMapping = {
@@ -51,7 +51,11 @@ const importFromXLSX = async (filePath) => {
         let linhasInvalidas = 0;
         const matriculasDaPlanilha = new Set();
 
-        for (const row of data) {
+        // NOVO: Loop para iterar com índice para logs mais claros
+        for (let i = 0; i < data.length; i++) {
+            const row = data[i];
+            const linhaNumero = i + 2; // +2 porque o sheet_to_json pula o cabeçalho e o índice é 0-based
+
             const funcionarioMapeado = {};
             for (const key in row) {
                 const normalizedKey = normalizeHeader(key);
@@ -59,8 +63,16 @@ const importFromXLSX = async (filePath) => {
                     funcionarioMapeado[columnMapping[normalizedKey]] = row[key] || null;
                 }
             }
+
+            // NOVO: Log de diagnóstico para as 5 primeiras linhas para depuração
+            if (i < 5) {
+                console.log(`[DIAGNÓSTICO LINHA ${linhaNumero}] Dados Brutos:`, row);
+                console.log(`[DIAGNÓSTICO LINHA ${linhaNumero}] Dados Mapeados:`, funcionarioMapeado);
+            }
             
+            // ALTERADO: Validação com log específico
             if (!funcionarioMapeado.matricula || !funcionarioMapeado.dth_admissao) {
+                console.warn(`[AVISO SERVICE] Linha ${linhaNumero} pulada: Matrícula ou Data de Admissão não encontradas. Verifique os nomes das colunas na planilha.`);
                 linhasInvalidas++;
                 continue;
             }
@@ -69,8 +81,11 @@ const importFromXLSX = async (filePath) => {
             let dataInvalida = false;
             for(const campoData of datasParaConverter) {
                 if (funcionarioMapeado[campoData]) {
-                    const dataObj = parse(String(funcionarioMapeado[campoData]), 'dd/MM/yyyy', new Date());
+                    const dataString = String(funcionarioMapeado[campoData]);
+                    const dataObj = parse(dataString, 'dd/MM/yyyy', new Date());
                     if (isNaN(dataObj.getTime())) {
+                        // ALTERADO: Log de erro de data específico
+                        console.warn(`[AVISO SERVICE] Linha ${linhaNumero} pulada: Formato de data inválido no campo '${campoData}'. Valor encontrado: '${dataString}'. Esperado: 'dd/MM/yyyy'.`);
                         dataInvalida = true;
                         break;
                     }
@@ -92,13 +107,14 @@ const importFromXLSX = async (filePath) => {
             funcionarioMapeado.status = 'Ativo';
             
             funcionariosParaProcessar.push(funcionarioMapeado);
-            matriculasDaPlanilha.add(funcionarioMapeado.matricula);
+            matriculasDaPlanilha.add(String(funcionarioMapeado.matricula));
         }
         
         console.log(`[LOG FUNCIONARIO SERVICE] Processamento concluído. ${funcionariosParaProcessar.length} registros válidos. ${linhasInvalidas} linhas inválidas puladas.`);
 
+        // ALTERADO: Mensagem de erro mais detalhada
         if (funcionariosParaProcessar.length === 0) {
-            throw new Error(`Nenhum registro válido foi encontrado. Verifique a planilha.`);
+            throw new Error(`Nenhum registro válido foi encontrado em ${data.length} linhas. Verifique os logs de [AVISO SERVICE] no terminal para ver os motivos exatos pelos quais as linhas foram puladas (nomes de coluna ou formato de data incorretos).`);
         }
         
         await Funcionario.bulkCreate(funcionariosParaProcessar, {
@@ -113,7 +129,7 @@ const importFromXLSX = async (filePath) => {
         
         const funcionariosNoBanco = await Funcionario.findAll({ attributes: ['matricula'], where: { status: 'Ativo' }, transaction: t, raw: true });
         const matriculasParaDesativar = funcionariosNoBanco
-            .map(f => f.matricula)
+            .map(f => String(f.matricula))
             .filter(m => !matriculasDaPlanilha.has(m));
             
         let desativados = 0;
@@ -141,47 +157,22 @@ const importFromXLSX = async (filePath) => {
     }
 };
 
-// ==========================================================
-// ALTERADO: Função `findAll` expandida com novos filtros
-// ==========================================================
-/**
- * Busca todos os funcionários com filtros e paginação.
- */
 const findAll = async (queryParams) => {
     const page = parseInt(queryParams.page, 10) || 1;
     const limit = parseInt(queryParams.limit, 10) || 20;
     const offset = (page - 1) * limit;
-
     const whereClause = {};
-
-    // Filtro de busca genérico
     if (queryParams.busca) {
         whereClause[Op.or] = [
             { nome_funcionario: { [Op.iLike]: `%${queryParams.busca}%` } },
             { matricula: { [Op.iLike]: `%${queryParams.busca}%` } }
         ];
     }
-
-    // Filtro por status
-    if (queryParams.status) { 
-        whereClause.status = queryParams.status; 
-    }
-    
-    // NOVO: Filtros específicos solicitados no PDF
-    if (queryParams.municipio) { 
-        whereClause.municipio_local_trabalho = queryParams.municipio; 
-    }
-    if (queryParams.grupoContrato) {
-        whereClause.des_grupo_contrato = queryParams.grupoContrato;
-    }
-    if (queryParams.categoria) {
-        whereClause.categoria = queryParams.categoria;
-    }
-    if (queryParams.tipoContrato) { // Corresponde a "Categoria do Trabalhador"
-        whereClause.categoria_trab = queryParams.tipoContrato;
-    }
-
-    // Filtros de Risco (existentes)
+    if (queryParams.status) { whereClause.status = queryParams.status; }
+    if (queryParams.municipio) { whereClause.municipio_local_trabalho = queryParams.municipio; }
+    if (queryParams.grupoContrato) { whereClause.des_grupo_contrato = queryParams.grupoContrato; }
+    if (queryParams.categoria) { whereClause.categoria = queryParams.categoria; }
+    if (queryParams.tipoContrato) { whereClause.categoria_trab = queryParams.tipoContrato; }
     if (queryParams.filtro) {
         const hoje = new Date();
         if (queryParams.filtro === 'vencidas') {
@@ -192,14 +183,12 @@ const findAll = async (queryParams) => {
             whereClause.dth_limite_ferias = { [Op.between]: [hoje, dataLimiteRisco] };
         }
     }
-    
     const { count, rows } = await Funcionario.findAndCountAll({
         where: whereClause,
         order: [['nome_funcionario', 'ASC']],
         limit,
         offset,
     });
-
     const totalPages = Math.ceil(count / limit);
     return {
         data: rows,
@@ -207,16 +196,10 @@ const findAll = async (queryParams) => {
     };
 };
 
-/**
- * Cria um novo funcionário.
- */
 const create = async (dadosFuncionario) => {
   return Funcionario.create(dadosFuncionario);
 };
 
-/**
- * Busca os detalhes de um único funcionário.
- */
 const findOne = async (matricula) => {
   return Funcionario.findByPk(matricula, {
     include: [
@@ -226,9 +209,6 @@ const findOne = async (matricula) => {
   });
 };
 
-/**
- * Atualiza os dados de um funcionário.
- */
 const update = async (matricula, dadosParaAtualizar) => {
   const funcionario = await Funcionario.findByPk(matricula);
   if (!funcionario) throw new Error('Funcionário não encontrado');
@@ -237,9 +217,6 @@ const update = async (matricula, dadosParaAtualizar) => {
   return funcionario;
 };
 
-/**
- * Remove um funcionário.
- */
 const remove = async (matricula) => {
   const funcionario = await Funcionario.findByPk(matricula);
   if (!funcionario) throw new Error('Funcionário não encontrado');
@@ -247,9 +224,6 @@ const remove = async (matricula) => {
   return { message: 'Funcionário removido com sucesso.' };
 };
 
-/**
- * Exporta a lista de funcionários para XLSX.
- */
 const exportAllToXLSX = async () => {
   const funcionarios = await Funcionario.findAll({ raw: true });
   const ws = XLSX.utils.json_to_sheet(funcionarios);
