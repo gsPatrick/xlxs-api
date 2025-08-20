@@ -18,10 +18,13 @@ const findAllActive = async (queryParams) => {
     const offset = (page - 1) * limit;
 
     const whereFuncionario = {};
-    if (queryParams.busca) {
+   // ==========================================================
+    // CORREÇÃO APLICADA AQUI: Alterado de `queryParams.busca` para `queryParams.q`
+    // ==========================================================
+    if (queryParams.q) {
         whereFuncionario[Op.or] = [
-            { nome_funcionario: { [Op.iLike]: `%${queryParams.busca}%` } },
-            { matricula: { [Op.iLike]: `%${queryParams.busca}%` } }
+            { nome_funcionario: { [Op.iLike]: `%${queryParams.q}%` } },
+            { matricula: { [Op.iLike]: `%${queryParams.q}%` } }
         ];
     }
     if (queryParams.municipio) { 
