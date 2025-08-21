@@ -10,30 +10,30 @@ const { parse, addDays } = require('date-fns');
 const normalizeHeader = (header) => {
     if (!header) return '';
     return header.toString().toLowerCase().trim()
-        .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // Remove acentos
-        .replace(/[._]/g, '') // Remove pontos e underscores
-        .replace(/\s+/g, ''); // Remove TODOS os espaços
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+        .replace(/[._]/g, '')
+        .replace(/\s+/g, '');
 };
 
 const columnMapping = {
     'matricula': 'matricula',
     'nomefuncionario': 'nome_funcionario',
     'dthadmissao': 'dth_admissao',
-    'proximoperiodoaquisitivo': 'proximo_periodo_aquisitivo_texto', // Novo
+    'proximoperiodoaquisitivo': 'proximo_periodo_aquisitivo_texto',
     'proximoperiodoaquisitivoinicio': 'periodo_aquisitivo_atual_inicio',
     'proximoperiodoaquisitivofinal': 'periodo_aquisitivo_atual_fim',
     'datalimite': 'dth_limite_ferias',
-    'datalimitefiltro': 'data_limite_filtro', // Novo
-    'ultimadataplanejada': 'ultima_data_planejada', // Novo
-    'ultimadataplanejadames': 'ultima_data_planejada_mes', // Novo
-    'anoultimadataplanejada': 'ano_ultima_data_planejada', // Novo
-    'qtdperiodosplanejados': 'qtd_periodos_planejados', // Novo
-    'qtdperiodosgozo': 'qtd_periodos_gozo', // Novo
-    'qtdperiodospendentes': 'qtd_periodos_pendentes', // Novo
-    'qtdperiodoscompletos': 'qtd_periodos_completos', // Novo
-    'qtdperiodosincompletos': 'qtd_periodos_incompletos', // Novo
-    'qtdperiodosindividuais': 'qtd_periodos_individuais', // Novo
-    'qtdperiodoscoletivos': 'qtd_periodos_coletivos', // Novo
+    'datalimitefiltro': 'data_limite_filtro',
+    'ultimadataplanejada': 'ultima_data_planejada',
+    'ultimadataplanejadames': 'ultima_data_planejada_mes',
+    'anoultimadataplanejada': 'ano_ultima_data_planejada',
+    'qtdperiodosplanejados': 'qtd_periodos_planejados',
+    'qtdperiodosgozo': 'qtd_periodos_gozo',
+    'qtdperiodospendentes': 'qtd_periodos_pendentes',
+    'qtdperiodoscompletos': 'qtd_periodos_completos',
+    'qtdperiodosincompletos': 'qtd_periodos_incompletos',
+    'qtdperiodosindividuais': 'qtd_periodos_individuais',
+    'qtdperiodoscoletivos': 'qtd_periodos_coletivos',
     'categoria': 'categoria',
     'categoriatrab': 'categoria_trab',
     'horario': 'horario',
@@ -55,39 +55,45 @@ const importFromXLSX = async (filePath) => {
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
         
+        // Log de diagnóstico para cabeçalhos
+        const headersRaw = XLSX.utils.sheet_to_json(worksheet, { header: 1, range: 1, raw: true })[0];
+        console.log('[DIAGNÓSTICO] Cabeçalhos lidos da planilha (Linha 2):', headersRaw);
+        console.log('[DIAGNÓSTICO] Cabeçalhos normalizados que o sistema irá usar:', headersRaw.map(normalizeHeader));
+
         const data = XLSX.utils.sheet_to_json(worksheet, { range: 1, raw: false, dateNF: 'dd/MM/yyyy' });
         
         console.log(`[LOG FUNCIONARIO SERVICE] Planilha lida. ${data.length} linhas de dados encontradas.`);
         
         const funcionariosParaProcessar = [];
-        const afastamentosParaCriar = []; // Array para armazenar afastamentos
+        const afastamentosParaCriar = [];
         let linhasInvalidas = 0;
         const matriculasDaPlanilha = new Set();
 
         for (let i = 0; i < data.length; i++) {
             const row = data[i];
-            const linhaNumero = i + 2;
+            const linhaNumero = i + 3;
 
             const funcionarioMapeado = {};
             for (const key in row) {
                 const normalizedKey = normalizeHeader(key);
                 if (columnMapping[normalizedKey]) {
-                    funcionarioMapeado[columnMapping[normalizedKey]] = row[key] || null;
+                    funcionarioMapeado[columnMapping[normalizedKey]] = row[key] === '' ? null : row[key];
                 }
             }
             
-            if (!funcionarioMapeado.matricula || !funcionarioMapeado.dth_admissao) {
+            if (!funcionarioMapeado.matricula || String(funcionarioMapeado.matricula).trim() === '' || !funcionarioMapeado.dth_admissao) {
                 linhasInvalidas++;
                 continue;
             }
 
-            const datasParaConverter = ['dth_admissao', 'periodo_aquisitivo_atual_inicio', 'periodo_aquisitivo_atual_fim', 'dth_limite_ferias'];
+            const datasParaConverter = ['dth_admissao', 'periodo_aquisitivo_atual_inicio', 'periodo_aquisitivo_atual_fim', 'dth_limite_ferias', 'data_limite_filtro', 'ultima_data_planejada'];
             let dataInvalida = false;
             for(const campoData of datasParaConverter) {
                 if (funcionarioMapeado[campoData]) {
                     const dataString = String(funcionarioMapeado[campoData]);
                     const dataObj = parse(dataString, 'dd/MM/yyyy', new Date());
                     if (isNaN(dataObj.getTime())) {
+                        console.warn(`[AVISO] Linha ${linhaNumero}: Formato de data inválido para '${campoData}' com valor '${dataString}'. Pulando linha.`);
                         dataInvalida = true;
                         break;
                     }
@@ -130,16 +136,18 @@ const importFromXLSX = async (filePath) => {
             matriculasDaPlanilha.add(String(funcionarioMapeado.matricula));
         }
         
-        console.log(`[LOG FUNCIONARIO SERVICE] Processamento concluído. ${funcionariosParaProcessar.length} registros válidos. ${afastamentosParaCriar.length} afastamentos identificados.`);
+        console.log(`[LOG FUNCIONARIO SERVICE] Processamento concluído. ${funcionariosParaProcessar.length} registros válidos. ${linhasInvalidas} linhas inválidas (ou em branco) puladas.`);
 
         if (funcionariosParaProcessar.length === 0) {
-            throw new Error(`Nenhum registro válido foi encontrado.`);
+            throw new Error(`Nenhum registro válido foi encontrado. Verifique se a planilha contém linhas em branco ou se os cabeçalhos 'Matricula' e 'DthAdmissao' estão corretos. Veja o log de [DIAGNÓSTICO] no terminal.`);
         }
         
         await Funcionario.bulkCreate(funcionariosParaProcessar, {
             transaction: t,
-            updateOnDuplicate: Object.values(columnMapping).concat(['saldo_dias_ferias', 'status']).filter(field => field !== 'matricula')
+            updateOnDuplicate: Object.values(columnMapping).filter(field => field !== 'matricula')
         });
+        
+        console.log(`[LOG FUNCIONARIO SERVICE] ${funcionariosParaProcessar.length} funcionários criados ou atualizados.`);
         
         if (afastamentosParaCriar.length > 0) {
             await Afastamento.bulkCreate(afastamentosParaCriar, {
@@ -170,9 +178,7 @@ const importFromXLSX = async (filePath) => {
         await t.commit();
         
         fs.unlinkSync(filePath);
-        return { 
-            message: `Importação concluída! ${funcionariosParaProcessar.length} funcionários processados. ${afastamentosParaCriar.length} afastamentos registrados. Um novo planejamento de férias foi gerado.` 
-        };
+        return { message: `Importação concluída! ${funcionariosParaProcessar.length} funcionários processados. ${desativados} foram desativados. ${afastamentosParaCriar.length} afastamentos registrados. Um novo planejamento de férias foi gerado.` };
 
     } catch (err) {
         await t.rollback();
@@ -188,14 +194,12 @@ const findAll = async (queryParams) => {
     const offset = (page - 1) * limit;
     const whereClause = {};
     
-if (queryParams.q) {
-    whereClause[Op.or] = [
-        { nome_funcionario: { [Op.iLike]: `%${queryParams.q}%` } },
-        { matricula: { [Op.iLike]: `%${queryParams.q}%` } },
-        { des_grupo_contrato: { [Op.iLike]: `%${queryParams.q}%` } }, // Gestão
-        { cliente: { [Op.iLike]: `%${queryParams.q}%` } }, // Cliente
-    ];
-}
+    if (queryParams.q) {
+        whereClause[Op.or] = [
+            { nome_funcionario: { [Op.iLike]: `%${queryParams.q}%` } },
+            { matricula: { [Op.iLike]: `%${queryParams.q}%` } }
+        ];
+    }
     
     if (queryParams.status) { whereClause.status = queryParams.status; }
     if (queryParams.municipio) { whereClause.municipio_local_trabalho = queryParams.municipio; }
