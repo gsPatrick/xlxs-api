@@ -215,7 +215,6 @@ async function distribuirFerias(ano, descricao, transaction = null) {
     console.log(`[LOG FÉRIAS SERVICE] Lógica de distribuição finalizada. ${feriasParaCriar.length} registros de férias serão criados.`);
 
     if (feriasParaCriar.length > 0) {
-        // CORREÇÃO ESTAVA AQUI: A chamada deve ser para `Ferias.bulkCreate`.
         await Ferias.bulkCreate(feriasParaCriar, options);
         console.log(`[LOG FÉRIAS SERVICE] ${feriasParaCriar.length} registros de férias inseridos no banco.`);
     }
