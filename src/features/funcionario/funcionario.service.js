@@ -19,9 +19,21 @@ const columnMapping = {
     'matricula': 'matricula',
     'nomefuncionario': 'nome_funcionario',
     'dthadmissao': 'dth_admissao',
+    'proximoperiodoaquisitivo': 'proximo_periodo_aquisitivo_texto', // Novo
     'proximoperiodoaquisitivoinicio': 'periodo_aquisitivo_atual_inicio',
     'proximoperiodoaquisitivofinal': 'periodo_aquisitivo_atual_fim',
     'datalimite': 'dth_limite_ferias',
+    'datalimitefiltro': 'data_limite_filtro', // Novo
+    'ultimadataplanejada': 'ultima_data_planejada', // Novo
+    'ultimadataplanejadames': 'ultima_data_planejada_mes', // Novo
+    'anoultimadataplanejada': 'ano_ultima_data_planejada', // Novo
+    'qtdperiodosplanejados': 'qtd_periodos_planejados', // Novo
+    'qtdperiodosgozo': 'qtd_periodos_gozo', // Novo
+    'qtdperiodospendentes': 'qtd_periodos_pendentes', // Novo
+    'qtdperiodoscompletos': 'qtd_periodos_completos', // Novo
+    'qtdperiodosincompletos': 'qtd_periodos_incompletos', // Novo
+    'qtdperiodosindividuais': 'qtd_periodos_individuais', // Novo
+    'qtdperiodoscoletivos': 'qtd_periodos_coletivos', // Novo
     'categoria': 'categoria',
     'categoriatrab': 'categoria_trab',
     'horario': 'horario',
@@ -176,12 +188,14 @@ const findAll = async (queryParams) => {
     const offset = (page - 1) * limit;
     const whereClause = {};
     
-    if (queryParams.q) {
-        whereClause[Op.or] = [
-            { nome_funcionario: { [Op.iLike]: `%${queryParams.q}%` } },
-            { matricula: { [Op.iLike]: `%${queryParams.q}%` } }
-        ];
-    }
+if (queryParams.q) {
+    whereClause[Op.or] = [
+        { nome_funcionario: { [Op.iLike]: `%${queryParams.q}%` } },
+        { matricula: { [Op.iLike]: `%${queryParams.q}%` } },
+        { des_grupo_contrato: { [Op.iLike]: `%${queryParams.q}%` } }, // Gestão
+        { cliente: { [Op.iLike]: `%${queryParams.q}%` } }, // Cliente
+    ];
+}
     
     if (queryParams.status) { whereClause.status = queryParams.status; }
     if (queryParams.municipio) { whereClause.municipio_local_trabalho = queryParams.municipio; }
