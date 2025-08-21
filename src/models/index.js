@@ -1,47 +1,51 @@
 // src/models/index.js
 
 const { Sequelize } = require('sequelize');
-const config = require('../config/database');
 const sequelize = require('../config/sequelize-instance');
 
-// O objeto `db` será nosso container principal para os modelos e a conexão.
 const db = {};
 
-// Importar todos os modelos e passá-los para o container `db`.
 db.Funcionario = require('./funcionario.model');
 db.Ferias = require('./ferias.model');
 db.Afastamento = require('./afastamento.model');
 db.Planejamento = require('./planejamento.model');
-db.User = require('./user.model'); // Adicionar o User aqui
+db.User = require('./user.model');
 
-// Definir os relacionamentos entre os modelos
-// É crucial fazer isso depois que todos os modelos foram carregados.
+// ==========================================================
+// DEFINIÇÃO CORRETA E CENTRALIZADA DAS ASSOCIAÇÕES
+// ==========================================================
 
-// Um Funcionário pode ter muitas Férias
+// Um Funcionário pode ter muitas Férias.
+// A chave estrangeira `matricula_funcionario` será adicionada ao modelo Ferias.
 db.Funcionario.hasMany(db.Ferias, { 
     foreignKey: 'matricula_funcionario', 
-    as: 'historicoFerias',
-    onDelete: 'CASCADE'
+    as: 'historicoFerias'
 });
-db.Ferias.belongsTo(db.Funcionario, { foreignKey: 'matricula_funcionario' });
+db.Ferias.belongsTo(db.Funcionario, { 
+    foreignKey: 'matricula_funcionario' 
+});
 
-// Um Funcionário pode ter muitos Afastamentos
+// Um Funcionário pode ter muitos Afastamentos.
+// A chave estrangeira `matricula_funcionario` será adicionada ao modelo Afastamento.
 db.Funcionario.hasMany(db.Afastamento, {
     foreignKey: 'matricula_funcionario',
-    as: 'historicoAfastamentos',
-    onDelete: 'CASCADE'
+    as: 'historicoAfastamentos'
 });
-db.Afastamento.belongsTo(db.Funcionario, { foreignKey: 'matricula_funcionario' });
+db.Afastamento.belongsTo(db.Funcionario, { 
+    foreignKey: 'matricula_funcionario' 
+});
 
-// Uma Férias pode pertencer a um Planejamento
+// Um Planejamento pode ter muitas Férias.
+// A chave estrangeira `planejamentoId` será adicionada ao modelo Ferias.
 db.Planejamento.hasMany(db.Ferias, { 
     foreignKey: 'planejamentoId', 
     as: 'itensDeFerias' 
 });
-db.Ferias.belongsTo(db.Planejamento, { foreignKey: 'planejamentoId' });
+db.Ferias.belongsTo(db.Planejamento, { 
+    foreignKey: 'planejamentoId' 
+});
 
 
-// Adicionar a instância do Sequelize e o próprio Sequelize ao objeto `db`.
 db.sequelize = sequelize;
 db.Sequelize = Sequelize;
 
