@@ -229,11 +229,16 @@ async function distribuirFerias(ano, descricao, transaction = null) {
 /**
  * Cria um novo registro de férias, calculando a data de fim.
  */
-async function create(dadosFerias) {
-    const { matricula_funcionario, data_inicio, qtd_dias } = dadosFerias;
-    if (!matricula_funcionario || !data_inicio || !qtd_dias) {
-        throw new Error("Matrícula, data de início e quantidade de dias são obrigatórios.");
+const create = async (dadosFerias) => {
+    const { matricula_funcionario, data_inicio, qtd_dias, ano_planejamento } = dadosFerias;
+    if (!matricula_funcionario || !data_inicio || !qtd_dias || !ano_planejamento) {
+        throw new Error("Matrícula, data de início, dias e ano do planejamento são obrigatórios.");
     }
+    const planejamentoAtivo = await Planejamento.findOne({ where: { ano: ano_planejamento, status: 'ativo' } });
+    if (!planejamentoAtivo) {
+        throw new Error(`Nenhum planejamento ativo encontrado para o ano ${ano_planejamento}.`);
+    }
+    dadosFerias.planejamentoId = planejamentoAtivo.id;
     const dataInicioObj = new Date(`${data_inicio}T00:00:00`);
     const dataFimObj = addDays(dataInicioObj, parseInt(qtd_dias, 10) - 1);
     dadosFerias.data_fim = format(dataFimObj, 'yyyy-MM-dd');
@@ -262,6 +267,8 @@ async function findAll(queryParams) {
     });
 }
 
+
+
 /**
  * Atualiza um registro de férias.
  */
@@ -283,17 +290,83 @@ async function update(id, dados) {
 /**
  * Remove um registro de férias.
  */
-async function remove(id) {
+const remove = async (id) => {
     const feria = await Ferias.findByPk(id);
     if (!feria) throw new Error('Período de férias não encontrado.');
     return feria.destroy();
 };
 
+const bulkRemove = async (ids) => {
+    if (!ids || ids.length === 0) throw new Error("Nenhum ID fornecido para exclusão.");
+    await Ferias.destroy({ where: { id: { [Op.in]: ids } } });
+    return { message: `${ids.length} registros de férias removidos com sucesso.` };
+};
+
+
+/**
+ * NOVO E COMPLETO: Busca todos os registros de férias do planejamento ativo com filtros e paginação.
+ * @param {object} queryParams - Parâmetros da query para filtragem e paginação.
+ * @returns {Promise<object>} Lista paginada de registros de férias.
+ */
+const findAllPaginated = async (queryParams) => {
+    const page = parseInt(queryParams.page, 10) || 1;
+    const limit = parseInt(queryParams.limit, 10) || 20;
+    const offset = (page - 1) * limit;
+    const ano = parseInt(queryParams.ano, 10) || new Date().getFullYear();
+
+    // Encontra o ID do planejamento ativo para o ano especificado
+    const planejamentoAtivo = await Planejamento.findOne({ where: { ano, status: 'ativo' } });
+    if (!planejamentoAtivo) {
+        return { data: [], pagination: { totalItems: 0, totalPages: 0, currentPage: 1, limit } };
+    }
+
+    const whereFuncionario = {};
+    const whereFerias = { planejamentoId: planejamentoAtivo.id };
+
+    // --- FILTROS DE FUNCIONÁRIO ---
+    if (queryParams.q) { whereFuncionario[Op.or] = [{ nome_funcionario: { [Op.iLike]: `%${queryParams.q}%` } }, { matricula: { [Op.iLike]: `%${queryParams.q}%` } }]; }
+    if (queryParams.matricula) { whereFuncionario.matricula = { [Op.iLike]: `%${queryParams.matricula}%` }; }
+    if (queryParams.status) { whereFuncionario.status = queryParams.status; }
+    if (queryParams.categoria) { whereFuncionario.categoria = { [Op.iLike]: `%${queryParams.categoria}%` }; }
+    if (queryParams.des_grupo_contrato) { whereFuncionario.des_grupo_contrato = { [Op.iLike]: `%${queryParams.des_grupo_contrato}%` }; }
+    if (queryParams.municipio_local_trabalho) { whereFuncionario.municipio_local_trabalho = { [Op.iLike]: `%${queryParams.municipio_local_trabalho}%` }; }
+    
+    // --- FILTROS ESPECÍFICOS DE FÉRIAS ---
+    if (queryParams.status_ferias) { whereFerias.status = queryParams.status_ferias; }
+    if (queryParams.ferias_inicio_de && queryParams.ferias_inicio_ate) {
+        whereFerias.data_inicio = { [Op.between]: [new Date(queryParams.ferias_inicio_de), new Date(queryParams.ferias_inicio_ate)] };
+    } else if (queryParams.ferias_inicio_de) {
+        whereFerias.data_inicio = { [Op.gte]: new Date(queryParams.ferias_inicio_de) };
+    } else if (queryParams.ferias_inicio_ate) {
+        whereFerias.data_inicio = { [Op.lte]: new Date(queryParams.ferias_inicio_ate) };
+    }
+
+    const { count, rows } = await Ferias.findAndCountAll({
+        where: whereFerias,
+        include: [{
+            model: Funcionario,
+            where: whereFuncionario,
+            required: true
+        }],
+        order: [['data_inicio', 'ASC']],
+        limit,
+        offset,
+    });
+
+    const totalPages = Math.ceil(count / limit);
+    return {
+        data: rows,
+        pagination: { totalItems: count, totalPages, currentPage: page, limit }
+    };
+};
+
 module.exports = {
     recalcularPeriodoAquisitivo,
     distribuirFerias,
+    findAllPaginated, // Exporta a nova função de listagem
     create,
-    findAll,
     update,
     remove,
+    bulkRemove, 
+    findAll// Exporta a função de exclusão em massa
 };

@@ -4,11 +4,9 @@ const { Afastamento, Funcionario } = require('../../models');
 const { Op } = require('sequelize');
 const feriasService = require('../ferias/ferias.service');
 
-// ==========================================================
-// NOVA FUNÇÃO (SEÇÃO 2.A DO PDF)
-// ==========================================================
 /**
- * Busca todos os afastamentos ativos com filtros e paginação.
+ * ALTERADO: Busca todos os afastamentos ativos com filtros expandidos e paginação.
+ * Agora, a filtragem pode ser feita por qualquer campo do funcionário.
  * @param {object} queryParams - Parâmetros da query para filtragem e paginação.
  * @returns {Promise<object>} Lista paginada de afastamentos.
  */
@@ -18,27 +16,27 @@ const findAllActive = async (queryParams) => {
     const offset = (page - 1) * limit;
 
     const whereFuncionario = {};
-   // ==========================================================
-    // CORREÇÃO APLICADA AQUI: Alterado de `queryParams.busca` para `queryParams.q`
-    // ==========================================================
+    // Busca rápida por nome ou matrícula
     if (queryParams.q) {
         whereFuncionario[Op.or] = [
             { nome_funcionario: { [Op.iLike]: `%${queryParams.q}%` } },
             { matricula: { [Op.iLike]: `%${queryParams.q}%` } }
         ];
     }
-    if (queryParams.municipio) { 
-        whereFuncionario.municipio_local_trabalho = queryParams.municipio; 
-    }
-    if (queryParams.grupoContrato) {
-        whereFuncionario.des_grupo_contrato = queryParams.grupoContrato;
-    }
-    if (queryParams.categoria) {
-        whereFuncionario.categoria = queryParams.categoria;
-    }
-    if (queryParams.tipoContrato) {
-        whereFuncionario.categoria_trab = queryParams.tipoContrato;
-    }
+    
+    // Filtros detalhados (copiados da lógica de funcionários)
+    if (queryParams.status) { whereFuncionario.status = queryParams.status; }
+    if (queryParams.matricula) { whereFuncionario.matricula = { [Op.iLike]: `%${queryParams.matricula}%` }; }
+    if (queryParams.situacao_ferias_afastamento_hoje) { whereFuncionario.situacao_ferias_afastamento_hoje = { [Op.iLike]: `%${queryParams.situacao_ferias_afastamento_hoje}%` }; }
+    if (queryParams.categoria) { whereFuncionario.categoria = { [Op.iLike]: `%${queryParams.categoria}%` }; }
+    if (queryParams.categoria_trab) { whereFuncionario.categoria_trab = { [Op.iLike]: `%${queryParams.categoria_trab}%` }; }
+    if (queryParams.horario) { whereFuncionario.horario = { [Op.iLike]: `%${queryParams.horario}%` }; }
+    if (queryParams.escala) { whereFuncionario.escala = { [Op.iLike]: `%${queryParams.escala}%` }; }
+    if (queryParams.sigla_local) { whereFuncionario.sigla_local = { [Op.iLike]: `%${queryParams.sigla_local}%` }; }
+    if (queryParams.municipio_local_trabalho) { whereFuncionario.municipio_local_trabalho = { [Op.iLike]: `%${queryParams.municipio_local_trabalho}%` }; }
+    if (queryParams.des_grupo_contrato) { whereFuncionario.des_grupo_contrato = { [Op.iLike]: `%${queryParams.des_grupo_contrato}%` }; }
+    if (queryParams.id_grupo_contrato) { whereFuncionario.id_grupo_contrato = queryParams.id_grupo_contrato; }
+    if (queryParams.convencao) { whereFuncionario.convencao = { [Op.iLike]: `%${queryParams.convencao}%` }; }
     
     const { count, rows } = await Afastamento.findAndCountAll({
         where: {
@@ -51,7 +49,7 @@ const findAllActive = async (queryParams) => {
         include: [{
             model: Funcionario,
             where: whereFuncionario,
-            required: true
+            required: true // Garante que só traga afastamentos de funcionários que batem com o filtro
         }],
         order: [['data_inicio', 'DESC']],
         limit,
@@ -88,8 +86,7 @@ const create = async (dadosAfastamento) => {
  * @returns {Promise<object|null>} O objeto do afastamento ou nulo se não encontrado.
  */
 const findOne = async (id) => {
-  const afastamento = await Afastamento.findByPk(id);
-  return afastamento;
+  return Afastamento.findByPk(id, { include: [Funcionario] });
 };
 
 /**
@@ -102,6 +99,11 @@ const update = async (id, dadosParaAtualizar) => {
   const afastamento = await Afastamento.findByPk(id);
   if (!afastamento) {
     throw new Error('Registro de afastamento não encontrado.');
+  }
+
+  // Se a data_fim for enviada como string vazia ou nula, salve como null no banco
+  if (dadosParaAtualizar.data_fim === '' || dadosParaAtualizar.data_fim === null) {
+      dadosParaAtualizar.data_fim = null;
   }
 
   await afastamento.update(dadosParaAtualizar);
@@ -126,10 +128,37 @@ const remove = async (id) => {
   return { message: 'Afastamento removido com sucesso.' };
 };
 
+/**
+ * NOVO: Remove múltiplos afastamentos em massa.
+ * @param {Array<number>} ids - Array de IDs dos afastamentos a serem removidos.
+ */
+const bulkRemove = async (ids) => {
+    if (!ids || ids.length === 0) {
+        throw new Error("Nenhum ID fornecido para exclusão.");
+    }
+
+    const afastamentos = await Afastamento.findAll({ where: { id: { [Op.in]: ids } } });
+    if (afastamentos.length === 0) {
+        return { message: "Nenhum afastamento encontrado para os IDs fornecidos." };
+    }
+
+    const matriculas = [...new Set(afastamentos.map(af => af.matricula_funcionario))];
+
+    await Afastamento.destroy({ where: { id: { [Op.in]: ids } } });
+
+    // Recalcula o período para cada funcionário afetado
+    for (const matricula of matriculas) {
+        await feriasService.recalcularPeriodoAquisitivo(matricula);
+    }
+
+    return { message: `${ids.length} afastamentos removidos com sucesso.` };
+};
+
 module.exports = {
-  findAllActive, // Exporta a nova função
+  findAllActive,
   create,
   findOne,
   update,
   remove,
+  bulkRemove
 };
