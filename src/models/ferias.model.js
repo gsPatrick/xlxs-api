@@ -38,15 +38,17 @@ const Ferias = sequelize.define('Ferias', {
     type: DataTypes.TEXT,
     allowNull: true,
   },
+  // ==========================================================
+  // NOVO CAMPO ADICIONADO (PONTO #6 DO FEEDBACK)
+  // ==========================================================
   necessidade_substituicao: {
     type: DataTypes.BOOLEAN,
     allowNull: false,
     defaultValue: false,
+    comment: 'Indica se o funcionário precisa de um substituto durante as férias.'
   }
 }, {
   tableName: 'ferias',
 });
-
-// REMOVA QUALQUER `Ferias.belongsTo` OU ASSOCIAÇÃO DESTE ARQUIVO
 
 module.exports = Ferias;

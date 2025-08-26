@@ -11,16 +11,13 @@ const getSummaryData = async () => {
     // DADOS GERAIS (CARDS PRINCIPAIS)
     // =================================================================
     
-    // 1. Total de Funcionários Ativos
     const totalFuncionarios = await Funcionario.count({ where: { status: 'Ativo' } });
 
-    // 2. Planejamento Ativo
     const planejamentoAtivo = await Planejamento.findOne({ 
         where: { status: 'ativo' },
         order: [['ano', 'DESC'], ['criado_em', 'DESC']] 
     });
 
-    // 3. Funcionários com Férias Já Planejadas no Planejamento Ativo
     let funcionariosComFeriasPlanejadas = 0;
     if (planejamentoAtivo) {
         funcionariosComFeriasPlanejadas = await Ferias.count({
@@ -30,7 +27,6 @@ const getSummaryData = async () => {
         });
     }
 
-    // 4. Percentual do quadro de funcionários com férias já planejadas
     const percentualPlanejado = totalFuncionarios > 0 
         ? ((funcionariosComFeriasPlanejadas / totalFuncionarios) * 100).toFixed(1) 
         : 0;
@@ -39,7 +35,6 @@ const getSummaryData = async () => {
     // ITENS DE AÇÃO (ALERTAS E PONTOS DE ATENÇÃO)
     // =================================================================
     
-    // 1. Férias Vencidas (data limite no passado)
     const feriasVencidas = await Funcionario.count({
         where: { 
             status: 'Ativo',
@@ -47,7 +42,6 @@ const getSummaryData = async () => {
         }
     });
 
-    // 2. Risco Iminente (data limite nos próximos 30 dias)
     const riscoIminente = await Funcionario.count({
         where: { 
             status: 'Ativo',
@@ -55,7 +49,6 @@ const getSummaryData = async () => {
         }
     });
     
-    // 3. Risco a Médio Prazo (data limite entre 31 e 90 dias)
     const riscoMedioPrazo = await Funcionario.count({
         where: {
             status: 'Ativo',
@@ -63,10 +56,21 @@ const getSummaryData = async () => {
         }
     });
 
-    // 4. Solicitações Pendentes (se você implementar esse status)
     const solicitacoesPendentes = await Ferias.count({
         where: { status: 'Solicitada' }
     });
+
+    // ==========================================================
+    // NOVA CONTAGEM (PONTO #6 DO FEEDBACK)
+    // ==========================================================
+    const necessidadeSubstituicao = await Ferias.count({
+        where: {
+            necessidade_substituicao: true,
+            status: { [Op.in]: ['Planejada', 'Confirmada'] },
+            data_inicio: { [Op.gte]: hoje }
+        }
+    });
+
 
     // =================================================================
     // DADOS PARA GRÁFICOS (DISTRIBUIÇÃO MENSAL)
@@ -113,6 +117,7 @@ const getSummaryData = async () => {
             { title: 'Férias Vencidas', count: feriasVencidas, link: '/funcionarios?filtro=vencidas', variant: 'danger' },
             { title: 'Risco Iminente (30 dias)', count: riscoIminente, link: '/funcionarios?filtro=risco_iminente', variant: 'warning' },
             { title: 'A Vencer (31-90 dias)', count: riscoMedioPrazo, link: '/funcionarios?filtro=risco_medio', variant: 'info' },
+            { title: 'Necessitam Substituição', count: necessidadeSubstituicao, link: '/planejamento?filtro=substituicao', variant: 'info' }, // NOVO ITEM
             { title: 'Solicitações Pendentes', count: solicitacoesPendentes, link: '/planejamento?filtro=pendentes', variant: 'neutral' },
         ],
         distribuicaoMensal

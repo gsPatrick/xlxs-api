@@ -70,22 +70,20 @@ const getVisaoGeral = async (queryParams) => {
     const inicioMes = startOfMonth(dataReferencia);
     const fimMes = endOfMonth(dataReferencia);
 
-    // NOVO: Construção da cláusula de filtro para o modelo Funcionario
+    // ==========================================================
+    // FILTROS EXPANDIDOS (PONTO #5 DO FEEDBACK)
+    // ==========================================================
     const whereFuncionario = {};
-    if (queryParams.grupoContrato) {
-        whereFuncionario.des_grupo_contrato = queryParams.grupoContrato;
-    }
-    if (queryParams.municipio) {
-        whereFuncionario.municipio_local_trabalho = queryParams.municipio;
-    }
-    if (queryParams.categoria) {
-        whereFuncionario.categoria = queryParams.categoria;
-    }
-    if (queryParams.tipoContrato) {
-        whereFuncionario.categoria_trab = queryParams.tipoContrato;
-    }
+    if (queryParams.grupoContrato) { whereFuncionario.des_grupo_contrato = queryParams.grupoContrato; }
+    if (queryParams.municipio) { whereFuncionario.municipio_local_trabalho = queryParams.municipio; }
+    if (queryParams.categoria) { whereFuncionario.categoria = queryParams.categoria; }
+    if (queryParams.tipoContrato) { whereFuncionario.categoria_trab = queryParams.tipoContrato; }
+    if (queryParams.estado) { whereFuncionario.sigla_local = queryParams.estado; }
+    // Adicionar filtros para 'Cliente' e 'Contrato' se esses campos existirem no modelo Funcionario
+    // if (queryParams.cliente) { whereFuncionario.cliente = queryParams.cliente; }
+    // if (queryParams.contrato) { whereFuncionario.contrato = queryParams.contrato; }
 
-    // Busca Férias que ocorrem no mês, aplicando o filtro de funcionário
+
     const feriasNoMes = await Ferias.findAll({
         where: {
             [Op.or]: [
@@ -100,12 +98,11 @@ const getVisaoGeral = async (queryParams) => {
         include: [{ 
             model: Funcionario, 
             attributes: ['nome_funcionario'],
-            where: whereFuncionario, // Filtro aplicado aqui
-            required: true // Transforma em INNER JOIN
+            where: whereFuncionario,
+            required: true
         }]
     });
 
-    // Busca Afastamentos que ocorrem no mês, aplicando o filtro de funcionário
     const afastamentosNoMes = await Afastamento.findAll({
         where: {
             [Op.or]: [
@@ -120,12 +117,11 @@ const getVisaoGeral = async (queryParams) => {
         include: [{ 
             model: Funcionario, 
             attributes: ['nome_funcionario'],
-            where: whereFuncionario, // Filtro aplicado aqui
-            required: true // Transforma em INNER JOIN
+            where: whereFuncionario,
+            required: true
         }]
     });
 
-    // Formata e combina os resultados
     const eventos = [];
     feriasNoMes.forEach(f => {
         eventos.push({

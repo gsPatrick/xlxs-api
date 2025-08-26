@@ -55,7 +55,6 @@ const importFromXLSX = async (filePath) => {
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
         
-        // Log de diagnóstico para cabeçalhos
         const headersRaw = XLSX.utils.sheet_to_json(worksheet, { header: 1, range: 1, raw: true })[0];
         console.log('[DIAGNÓSTICO] Cabeçalhos lidos da planilha (Linha 2):', headersRaw);
         console.log('[DIAGNÓSTICO] Cabeçalhos normalizados que o sistema irá usar:', headersRaw.map(normalizeHeader));
@@ -265,6 +264,60 @@ const exportAllToXLSX = async () => {
   return { buffer, fileName: 'Relatorio_Completo_Funcionarios.xlsx' };
 };
 
+// ==========================================================
+// NOVA FUNÇÃO PARA BUSCAR OPÇÕES DE FILTRO
+// ==========================================================
+const getFilterOptions = async () => {
+    try {
+        const municipios = await Funcionario.findAll({
+            attributes: [[sequelize.fn('DISTINCT', sequelize.col('municipio_local_trabalho')), 'municipio_local_trabalho']],
+            where: { municipio_local_trabalho: { [Op.not]: null } },
+            order: [['municipio_local_trabalho', 'ASC']],
+            raw: true
+        });
+
+        const gestoes = await Funcionario.findAll({
+            attributes: [[sequelize.fn('DISTINCT', sequelize.col('des_grupo_contrato')), 'des_grupo_contrato']],
+            where: { des_grupo_contrato: { [Op.not]: null } },
+            order: [['des_grupo_contrato', 'ASC']],
+            raw: true
+        });
+
+        const categorias = await Funcionario.findAll({
+            attributes: [[sequelize.fn('DISTINCT', sequelize.col('categoria')), 'categoria']],
+            where: { categoria: { [Op.not]: null } },
+            order: [['categoria', 'ASC']],
+            raw: true
+        });
+        
+        const estados = await Funcionario.findAll({
+            attributes: [[sequelize.fn('DISTINCT', sequelize.col('sigla_local')), 'sigla_local']],
+            where: { sigla_local: { [Op.not]: null } },
+            order: [['sigla_local', 'ASC']],
+            raw: true
+        });
+
+        const escalas = await Funcionario.findAll({
+            attributes: [[sequelize.fn('DISTINCT', sequelize.col('escala')), 'escala']],
+            where: { escala: { [Op.not]: null } },
+            order: [['escala', 'ASC']],
+            raw: true
+        });
+
+        return {
+            municipios: municipios.map(item => item.municipio_local_trabalho),
+            gestoes: gestoes.map(item => item.des_grupo_contrato),
+            categorias: categorias.map(item => item.categoria),
+            estados: estados.map(item => item.sigla_local),
+            escalas: escalas.map(item => item.escala),
+        };
+    } catch (error) {
+        console.error("Erro ao buscar opções de filtro:", error);
+        throw new Error("Não foi possível carregar as opções de filtro.");
+    }
+};
+
+
 module.exports = {
   importFromXLSX,
   findAll,
@@ -273,4 +326,5 @@ module.exports = {
   update,
   remove,
   exportAllToXLSX,
+  getFilterOptions, // Exporta a nova função
 };

@@ -371,9 +371,18 @@ const create = async (dadosFerias) => {
     const dataInicioObj = new Date(`${data_inicio}T00:00:00`);
     const dataFimObj = addDays(dataInicioObj, parseInt(qtd_dias, 10) - 1);
     dadosFerias.data_fim = format(dataFimObj, 'yyyy-MM-dd');
+    
+    // Inclui o novo campo
+    if (dadosFerias.necessidade_substituicao !== undefined) {
+        dadosFerias.necessidade_substituicao = Boolean(dadosFerias.necessidade_substituicao);
+    }
+    
     return Ferias.create(dadosFerias);
 };
 
+/**
+ * Busca todos os registros de férias com filtros.
+ */
 /**
  * Busca todos os registros de férias com filtros.
  */
@@ -401,6 +410,9 @@ async function findAll(queryParams) {
 /**
  * Atualiza um registro de férias.
  */
+/**
+ * Atualiza um registro de férias.
+ */
 async function update(id, dados) {
     const feria = await Ferias.findByPk(id);
     if (!feria) throw new Error('Período de férias não encontrado.');
@@ -413,6 +425,12 @@ async function update(id, dados) {
         const dataFimObj = addDays(dataInicioObj, parseInt(novaQtdDias, 10) - 1);
         dados.data_fim = format(dataFimObj, 'yyyy-MM-dd');
     }
+    
+    // Inclui o novo campo
+    if (dados.necessidade_substituicao !== undefined) {
+        dados.necessidade_substituicao = Boolean(dados.necessidade_substituicao);
+    }
+
     return feria.update(dados);
 };
 
@@ -437,6 +455,9 @@ const bulkRemove = async (ids) => {
  * @param {object} queryParams - Parâmetros da query para filtragem e paginação.
  * @returns {Promise<object>} Lista paginada de registros de férias.
  */
+/**
+ * Busca todos os registros de férias do planejamento ativo com filtros e paginação.
+ */
 const findAllPaginated = async (queryParams) => {
     const page = parseInt(queryParams.page, 10) || 1;
     const limit = parseInt(queryParams.limit, 10) || 20;
@@ -451,13 +472,20 @@ const findAllPaginated = async (queryParams) => {
     const whereFuncionario = {};
     const whereFerias = { planejamentoId: planejamentoAtivo.id };
 
+    // --- FILTROS DE FUNCIONÁRIO ---
     if (queryParams.q) { whereFuncionario[Op.or] = [{ nome_funcionario: { [Op.iLike]: `%${queryParams.q}%` } }, { matricula: { [Op.iLike]: `%${queryParams.q}%` } }]; }
     if (queryParams.matricula) { whereFuncionario.matricula = { [Op.iLike]: `%${queryParams.matricula}%` }; }
     if (queryParams.status) { whereFuncionario.status = queryParams.status; }
     if (queryParams.categoria) { whereFuncionario.categoria = { [Op.iLike]: `%${queryParams.categoria}%` }; }
     if (queryParams.des_grupo_contrato) { whereFuncionario.des_grupo_contrato = { [Op.iLike]: `%${queryParams.des_grupo_contrato}%` }; }
     if (queryParams.municipio_local_trabalho) { whereFuncionario.municipio_local_trabalho = { [Op.iLike]: `%${queryParams.municipio_local_trabalho}%` }; }
+    // ==========================================================
+    // NOVOS FILTROS ADICIONADOS (PONTO #3 DO FEEDBACK)
+    // ==========================================================
+    if (queryParams.sigla_local) { whereFuncionario.sigla_local = { [Op.iLike]: `%${queryParams.sigla_local}%` }; }
+    if (queryParams.escala) { whereFuncionario.escala = { [Op.iLike]: `%${queryParams.escala}%` }; }
     
+    // --- FILTROS ESPECÍFICOS DE FÉRIAS ---
     if (queryParams.status_ferias) { whereFerias.status = queryParams.status_ferias; }
     if (queryParams.ferias_inicio_de && queryParams.ferias_inicio_ate) {
         whereFerias.data_inicio = { [Op.between]: [new Date(queryParams.ferias_inicio_de), new Date(queryParams.ferias_inicio_ate)] };

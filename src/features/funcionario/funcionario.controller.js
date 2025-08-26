@@ -2,9 +2,6 @@
 
 const funcionarioService = require('./funcionario.service');
 
-// Importa uma planilha CSV
-
-
 // Adiciona um novo funcionário
 const create = async (req, res) => {
   try {
@@ -84,7 +81,7 @@ const exportAll = async (req, res) => {
 
 // Renomeado para 'importFile' para ser genérico (aceita XLSX)
 const importFile = async (req, res) => {
-  console.log('[LOG CONTROLLER] Requisição de importação recebida.'); // LOG 1
+  console.log('[LOG CONTROLLER] Requisição de importação recebida.');
 
   try {
     if (!req.file) {
@@ -92,19 +89,31 @@ const importFile = async (req, res) => {
       return res.status(400).send({ message: 'Nenhum arquivo enviado.' });
     }
     
-    console.log(`[LOG CONTROLLER] Arquivo recebido: ${req.file.originalname}, tamanho: ${req.file.size} bytes.`); // LOG 2
-    console.log('[LOG CONTROLLER] Chamando o serviço importFromXLSX...'); // LOG 3
+    console.log(`[LOG CONTROLLER] Arquivo recebido: ${req.file.originalname}, tamanho: ${req.file.size} bytes.`);
+    console.log('[LOG CONTROLLER] Chamando o serviço importFromXLSX...');
 
-    // Garante que está chamando a função 'importFromXLSX' que existe no serviço
     const result = await funcionarioService.importFromXLSX(req.file.path);
 
-    console.log('[LOG CONTROLLER] Serviço executado com sucesso. Enviando resposta.'); // LOG 4
+    console.log('[LOG CONTROLLER] Serviço executado com sucesso. Enviando resposta.');
     res.status(200).send(result);
 
   } catch (error) {
-    console.error('[ERRO CONTROLLER] Falha na importação:', error); // LOG DE ERRO
+    console.error('[ERRO CONTROLLER] Falha na importação:', error);
     res.status(500).send({ message: 'Falha ao processar o arquivo.', error: error.message });
   }
+};
+
+// ==========================================================
+// NOVO CONTROLLER
+// ==========================================================
+const getFilterOptions = async (req, res) => {
+    try {
+        const options = await funcionarioService.getFilterOptions();
+        res.status(200).send(options);
+    } catch (error) {
+        console.error('Erro no controller ao buscar opções de filtro:', error);
+        res.status(500).send({ message: 'Falha ao buscar opções de filtro.', error: error.message });
+    }
 };
 
 module.exports = {
@@ -114,5 +123,6 @@ module.exports = {
   update,
   remove,
   exportAll,
-  importFile
+  importFile,
+  getFilterOptions, // Exporta o novo controller
 };

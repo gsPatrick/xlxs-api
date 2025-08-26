@@ -41,4 +41,4 @@ const Funcionario = sequelize.define('Funcionario', {
 
 // REMOVA QUALQUER `Funcionario.hasMany` OU ASSOCIAÇÃO DESTE ARQUIVO
 
-module.exports = Funcionario;
+module.exports = Funcionario; 
