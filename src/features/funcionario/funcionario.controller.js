@@ -89,10 +89,19 @@ const importFile = async (req, res) => {
       return res.status(400).send({ message: 'Nenhum arquivo enviado.' });
     }
     
-    console.log(`[LOG CONTROLLER] Arquivo recebido: ${req.file.originalname}, tamanho: ${req.file.size} bytes.`);
-    console.log('[LOG CONTROLLER] Chamando o serviço importFromXLSX...');
+    console.log(`[LOG CONTROLLER] Arquivo recebido: ${req.file.originalname}`);
+    
+    // ==========================================================
+    // CAPTURA DAS DATAS VINDAS DO FORMULÁRIO
+    // ==========================================================
+    const { data_inicio_distribuicao, data_fim_distribuicao } = req.body;
+    
+    console.log('[LOG CONTROLLER] Chamando o serviço importFromXLSX com as opções:', { data_inicio_distribuicao, data_fim_distribuicao });
 
-    const result = await funcionarioService.importFromXLSX(req.file.path);
+    const result = await funcionarioService.importFromXLSX(req.file.path, {
+        data_inicio_distribuicao,
+        data_fim_distribuicao
+    });
 
     console.log('[LOG CONTROLLER] Serviço executado com sucesso. Enviando resposta.');
     res.status(200).send(result);

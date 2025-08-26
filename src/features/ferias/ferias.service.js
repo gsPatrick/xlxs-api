@@ -94,6 +94,29 @@ async function recalcularPeriodoAquisitivo(matricula) {
     return funcionario;
 }
 
+function isDataValidaInicio(data, funcionario, feriados) {
+    const dataChecagem = new Date(`${data}T12:00:00Z`);
+    const diaDaSemana = getDay(dataChecagem);
+
+    const convencoesExcecao = ['SEEACEPI', 'SECAPI Interior'];
+    if (funcionario.convencao && convencoesExcecao.some(c => funcionario.convencao.includes(c))) {
+        return diaDaSemana !== 0;
+    }
+
+    if (diaDaSemana === 6 || diaDaSemana === 0 || diaDaSemana === 5) {
+        return false;
+    }
+
+    const diaSeguinte = format(addDays(dataChecagem, 1), 'yyyy-MM-dd');
+    const doisDiasDepois = format(addDays(dataChecagem, 2), 'yyyy-MM-dd');
+
+    if (feriados.includes(diaSeguinte) || feriados.includes(doisDiasDepois)) {
+        return false;
+    }
+    
+    return true;
+};
+
 /**
  * Função auxiliar para verificar se a data de início das férias é válida.
  */
@@ -123,19 +146,21 @@ function isDataValidaInicio(data, funcionario, feriados) {
 /**
  * Orquestra a criação de um novo planejamento de férias para um ano.
  */
-async function distribuirFerias(ano, descricao, transaction = null) {
-    console.log(`[LOG FÉRIAS SERVICE] Iniciando distribuição de férias para o ano ${ano}...`);
+async function distribuirFerias(ano, descricao, options = {}) {
+    const { transaction, dataInicioDist, dataFimDist } = options;
+    console.log(`[LOG FÉRIAS SERVICE] Iniciando distribuição para o ano ${ano}. Período customizado: ${dataInicioDist || 'N/A'} a ${dataFimDist || 'N/A'}`);
+
     const t = transaction || await sequelize.transaction();
-    const options = { transaction: t };
+    const transactionOptions = { transaction: t };
 
     try {
-        await Planejamento.update({ status: 'arquivado' }, { where: { ano, status: 'ativo' }, ...options });
+        await Planejamento.update({ status: 'arquivado' }, { where: { ano, status: 'ativo' }, ...transactionOptions });
         
         const novoPlanejamento = await Planejamento.create({
             ano,
             descricao: descricao || `Distribuição automática para ${ano}`,
             status: 'ativo'
-        }, options);
+        }, transactionOptions);
         console.log(`[LOG FÉRIAS SERVICE] Novo planejamento ID ${novoPlanejamento.id} criado.`);
 
         const funcionariosElegiveis = await Funcionario.findAll({
@@ -146,48 +171,36 @@ async function distribuirFerias(ano, descricao, transaction = null) {
             },
             include: [{ model: Afastamento, as: 'historicoAfastamentos', required: false }],
             order: [['dth_limite_ferias', 'ASC']],
-            ...options
+            ...transactionOptions
         });
 
-        console.log(`[LOG FÉRIAS SERVICE] ${funcionariosElegiveis.length} funcionários elegíveis encontrados para o planejamento.`);
+        console.log(`[LOG FÉRIAS SERVICE] ${funcionariosElegiveis.length} funcionários elegíveis encontrados.`);
         
         if (funcionariosElegiveis.length === 0) {
             if (!transaction) await t.commit();
-            return { message: `Planejamento para ${ano} criado, mas nenhum funcionário era elegível para alocação automática.` };
+            return { message: `Planejamento para ${ano} criado, mas nenhum funcionário era elegível.` };
         }
 
         const feriadosDoAno = await getFeriadosNacionais(ano);
         const feriasParaCriar = [];
         const calendarioOcupacao = {};
-        const funcionariosExcluidos = [];
 
         for (const funcionario of funcionariosElegiveis) {
-            let excluidoPorAfastamento = false;
-            const hoje = new Date();
-            if (funcionario.historicoAfastamentos && funcionario.historicoAfastamentos.length > 0) {
-                for (const af of funcionario.historicoAfastamentos) {
-                    if (!af.data_fim || new Date(af.data_fim) > hoje) {
-                        const inicioAfastamento = new Date(af.data_inicio);
-                        const fimAfastamento = af.data_fim ? new Date(af.data_fim) : addDays(inicioAfastamento, 365);
-                        const duracaoAfastamento = differenceInDays(fimAfastamento, inicioAfastamento);
-                        if (duracaoAfastamento > 15) {
-                            funcionariosExcluidos.push({ matricula: funcionario.matricula, nome: funcionario.nome_funcionario, motivo: `Afastamento ativo superior a 15 dias.` });
-                            excluidoPorAfastamento = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            if (excluidoPorAfastamento) continue;
-
             const diasDeFerias = funcionario.saldo_dias_ferias;
             if (diasDeFerias <= 0) continue;
 
             let dataInicioEncontrada = false;
-            let dataAtual = new Date() > new Date(funcionario.periodo_aquisitivo_atual_inicio) ? new Date() : new Date(funcionario.periodo_aquisitivo_atual_inicio);
-            const dataLimite = new Date(funcionario.dth_limite_ferias);
+            // Define a data de início da busca: ou a data customizada ou a data de hoje/início do período aquisitivo
+            let dataAtual = dataInicioDist 
+                ? startOfDay(parseISO(dataInicioDist))
+                : (new Date() > new Date(funcionario.periodo_aquisitivo_atual_inicio) ? new Date() : new Date(funcionario.periodo_aquisitivo_atual_inicio));
 
-            while (!dataInicioEncontrada && dataAtual < dataLimite) {
+            // Define a data limite da busca: ou a data customizada ou a data limite de férias do funcionário
+            const dataLimiteBusca = dataFimDist
+                ? startOfDay(parseISO(dataFimDist))
+                : new Date(funcionario.dth_limite_ferias);
+
+            while (!dataInicioEncontrada && dataAtual < dataLimiteBusca) {
                 if (isDataValidaInicio(format(dataAtual, 'yyyy-MM-dd'), funcionario, feriadosDoAno)) {
                     const mes = dataAtual.toLocaleString('pt-BR', { month: 'long' });
                     const municipio = funcionario.municipio_local_trabalho || 'N/A';
@@ -215,11 +228,9 @@ async function distribuirFerias(ano, descricao, transaction = null) {
             }
         }
 
-        console.log(`[LOG FÉRIAS SERVICE] Lógica de distribuição finalizada. ${feriasParaCriar.length} registros de férias serão criados.`);
-
         if (feriasParaCriar.length > 0) {
-            await Ferias.bulkCreate(feriasParaCriar, options);
-            console.log(`[LOG FÉRIAS SERVICE] ${feriasParaCriar.length} registros de férias inseridos no banco.`);
+            await Ferias.bulkCreate(feriasParaCriar, transactionOptions);
+            console.log(`[LOG FÉRIAS SERVICE] ${feriasParaCriar.length} registros de férias inseridos.`);
         }
         
         if (!transaction) await t.commit();
@@ -227,7 +238,6 @@ async function distribuirFerias(ano, descricao, transaction = null) {
         return { 
             message: `Distribuição para ${ano} concluída. ${feriasParaCriar.length} períodos planejados.`,
             registrosCriados: feriasParaCriar.length,
-            funcionariosExcluidos: funcionariosExcluidos
         };
     } catch(error) {
         if (!transaction) await t.rollback();

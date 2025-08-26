@@ -46,8 +46,9 @@ const columnMapping = {
     'qtdfaltas': 'faltas_injustificadas_periodo'
 };
 
-const importFromXLSX = async (filePath) => {
-    console.log(`[LOG FUNCIONARIO SERVICE] Iniciando processo de importação para: ${filePath}`);
+const importFromXLSX = async (filePath, options = {}) => {
+    const { data_inicio_distribuicao, data_fim_distribuicao } = options;
+    console.log(`[LOG FUNCIONARIO SERVICE] Iniciando importação para: ${filePath}`);
     const t = await sequelize.transaction();
 
     try {
@@ -56,12 +57,11 @@ const importFromXLSX = async (filePath) => {
         const worksheet = workbook.Sheets[sheetName];
         
         const headersRaw = XLSX.utils.sheet_to_json(worksheet, { header: 1, range: 1, raw: true })[0];
-        console.log('[DIAGNÓSTICO] Cabeçalhos lidos da planilha (Linha 2):', headersRaw);
-        console.log('[DIAGNÓSTICO] Cabeçalhos normalizados que o sistema irá usar:', headersRaw.map(normalizeHeader));
+        console.log('[DIAGNÓSTICO] Cabeçalhos lidos:', headersRaw);
 
         const data = XLSX.utils.sheet_to_json(worksheet, { range: 1, raw: false, dateNF: 'dd/MM/yyyy' });
         
-        console.log(`[LOG FUNCIONARIO SERVICE] Planilha lida. ${data.length} linhas de dados encontradas.`);
+        console.log(`[LOG FUNCIONARIO SERVICE] ${data.length} linhas de dados encontradas.`);
         
         const funcionariosParaProcessar = [];
         const afastamentosParaCriar = [];
@@ -71,7 +71,6 @@ const importFromXLSX = async (filePath) => {
         for (let i = 0; i < data.length; i++) {
             const row = data[i];
             const linhaNumero = i + 3;
-
             const funcionarioMapeado = {};
             for (const key in row) {
                 const normalizedKey = normalizeHeader(key);
@@ -92,7 +91,7 @@ const importFromXLSX = async (filePath) => {
                     const dataString = String(funcionarioMapeado[campoData]);
                     const dataObj = parse(dataString, 'dd/MM/yyyy', new Date());
                     if (isNaN(dataObj.getTime())) {
-                        console.warn(`[AVISO] Linha ${linhaNumero}: Formato de data inválido para '${campoData}' com valor '${dataString}'. Pulando linha.`);
+                        console.warn(`[AVISO] Linha ${linhaNumero}: Data inválida para '${campoData}' valor '${dataString}'. Pulando.`);
                         dataInvalida = true;
                         break;
                     }
@@ -106,9 +105,9 @@ const importFromXLSX = async (filePath) => {
             
             const faltas = parseInt(funcionarioMapeado.faltas_injustificadas_periodo, 10) || 0;
             if (faltas <= 5) funcionarioMapeado.saldo_dias_ferias = 30;
-            else if (faltas >= 6 && faltas <= 14) funcionarioMapeado.saldo_dias_ferias = 24;
-            else if (faltas >= 15 && faltas <= 23) funcionarioMapeado.saldo_dias_ferias = 18;
-            else if (faltas >= 24 && faltas <= 32) funcionarioMapeado.saldo_dias_ferias = 12;
+            else if (faltas <= 14) funcionarioMapeado.saldo_dias_ferias = 24;
+            else if (faltas <= 23) funcionarioMapeado.saldo_dias_ferias = 18;
+            else if (faltas <= 32) funcionarioMapeado.saldo_dias_ferias = 12;
             else funcionarioMapeado.saldo_dias_ferias = 0;
 
             const situacao = funcionarioMapeado.situacao_ferias_afastamento_hoje;
@@ -135,10 +134,10 @@ const importFromXLSX = async (filePath) => {
             matriculasDaPlanilha.add(String(funcionarioMapeado.matricula));
         }
         
-        console.log(`[LOG FUNCIONARIO SERVICE] Processamento concluído. ${funcionariosParaProcessar.length} registros válidos. ${linhasInvalidas} linhas inválidas (ou em branco) puladas.`);
+        console.log(`[LOG FUNCIONARIO SERVICE] Processamento concluído. ${funcionariosParaProcessar.length} válidos. ${linhasInvalidas} inválidas.`);
 
         if (funcionariosParaProcessar.length === 0) {
-            throw new Error(`Nenhum registro válido foi encontrado. Verifique se a planilha contém linhas em branco ou se os cabeçalhos 'Matricula' e 'DthAdmissao' estão corretos. Veja o log de [DIAGNÓSTICO] no terminal.`);
+            throw new Error(`Nenhum registro válido encontrado.`);
         }
         
         await Funcionario.bulkCreate(funcionariosParaProcessar, {
@@ -146,14 +145,14 @@ const importFromXLSX = async (filePath) => {
             updateOnDuplicate: Object.values(columnMapping).filter(field => field !== 'matricula')
         });
         
-        console.log(`[LOG FUNCIONARIO SERVICE] ${funcionariosParaProcessar.length} funcionários criados ou atualizados.`);
+        console.log(`[LOG FUNCIONARIO SERVICE] ${funcionariosParaProcessar.length} funcionários criados/atualizados.`);
         
         if (afastamentosParaCriar.length > 0) {
             await Afastamento.bulkCreate(afastamentosParaCriar, {
                 transaction: t,
                 updateOnDuplicate: ['data_fim', 'motivo', 'impacta_ferias'],
             });
-            console.log(`[LOG FUNCIONARIO SERVICE] ${afastamentosParaCriar.length} afastamentos criados ou atualizados.`);
+            console.log(`[LOG FUNCIONARIO SERVICE] ${afastamentosParaCriar.length} afastamentos criados/atualizados.`);
         }
 
         const funcionariosNoBanco = await Funcionario.findAll({ attributes: ['matricula'], where: { status: 'Ativo' }, transaction: t, raw: true });
@@ -168,11 +167,16 @@ const importFromXLSX = async (filePath) => {
                 { where: { matricula: { [Op.in]: matriculasParaDesativar } }, transaction: t }
             );
             desativados = updateCount;
-            console.log(`[LOG FUNCIONARIO SERVICE] ${desativados} funcionários foram desativados por não estarem na planilha.`);
+            console.log(`[LOG FUNCIONARIO SERVICE] ${desativados} funcionários desativados.`);
         }
         
-        const anoAtual = new Date().getFullYear();
-        await feriasService.distribuirFerias(anoAtual, `Planejamento gerado após importação`, t);
+        const anoDistribuicao = data_inicio_distribuicao ? getYear(parseISO(data_inicio_distribuicao)) : new Date().getFullYear();
+        
+        await feriasService.distribuirFerias(anoDistribuicao, `Planejamento gerado após importação`, {
+            transaction: t,
+            dataInicioDist: data_inicio_distribuicao,
+            dataFimDist: data_fim_distribuicao
+        });
 
         await t.commit();
         
@@ -181,7 +185,7 @@ const importFromXLSX = async (filePath) => {
 
     } catch (err) {
         await t.rollback();
-        console.error("[ERRO FATAL SERVICE] A transação foi revertida.", err);
+        console.error("[ERRO FATAL SERVICE] Transação revertida.", err);
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
         throw new Error(err.message || "Ocorreu um erro crítico durante a importação.");
     }
