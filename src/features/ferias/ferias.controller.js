@@ -2,7 +2,6 @@
 
 const feriasService = require('./ferias.service');
 
-// NOVO: Controlador para a listagem paginada do planejamento
 const findAllPaginated = async (req, res) => {
     try {
         const ferias = await feriasService.findAllPaginated(req.query);
@@ -21,6 +20,19 @@ const distribuir = async (req, res) => {
         res.status(200).send(resultado);
     } catch (error) {
         res.status(500).send({ message: 'Falha ao distribuir férias.', error: error.message });
+    }
+};
+
+// ==========================================================
+// NOVO CONTROLLER
+// ==========================================================
+const redistribuirSelecionadas = async (req, res) => {
+    try {
+        const resultado = await feriasService.redistribuirFeriasSelecionadas(req.body);
+        res.status(200).send(resultado);
+    } catch (error) {
+        console.error("Erro no controller ao redistribuir férias selecionadas:", error);
+        res.status(500).send({ message: 'Falha ao redistribuir férias.', error: error.message });
     }
 };
 
@@ -68,6 +80,7 @@ const bulkRemove = async (req, res) => {
 module.exports = { 
     findAllPaginated,
     distribuir,
+    redistribuirSelecionadas, // Exporta o novo controller
     create,
     update,
     remove,

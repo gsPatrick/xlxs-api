@@ -5,13 +5,20 @@ const feriasController = require('./ferias.controller');
 
 const router = express.Router();
 
-// NOVO: GET /api/ferias/planejamento-ativo -> Lista o planejamento ativo com filtros e paginação
+// GET /api/ferias/planejamento-ativo -> Lista o planejamento ativo com filtros e paginação
 router.get('/planejamento-ativo', feriasController.findAllPaginated);
 
-// POST /api/ferias/distribuir -> Aciona a distribuição automática
+// POST /api/ferias/distribuir -> Aciona a distribuição automática para um ano inteiro
 router.post('/distribuir', feriasController.distribuir);
 
-// NOVO: DELETE /api/ferias/bulk -> Exclui múltiplos registros de férias
+// ==========================================================
+// NOVA ROTA
+// ==========================================================
+// POST /api/ferias/redistribuir-selecionados -> Aciona a redistribuição para funcionários selecionados
+router.post('/redistribuir-selecionados', feriasController.redistribuirSelecionadas);
+
+
+// DELETE /api/ferias/bulk -> Exclui múltiplos registros de férias
 router.delete('/bulk', feriasController.bulkRemove);
 
 // --- Rotas de CRUD para um registro de Férias individual ---

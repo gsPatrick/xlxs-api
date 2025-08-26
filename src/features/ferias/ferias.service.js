@@ -1,9 +1,9 @@
 // src/features/ferias/ferias.service.js
 
-const { Op } = require('sequelize');
+const { Op, fn, col, literal } = require('sequelize');
 const axios = require('axios');
-const { Ferias, Funcionario, Planejamento, Afastamento } = require('../../models');
-const { addYears, addMonths, addDays, differenceInDays, isWithinInterval, getDay, format } = require('date-fns');
+const { Ferias, Funcionario, Planejamento, Afastamento, sequelize } = require('../../models');
+const { addYears, addMonths, addDays, differenceInDays, isWithinInterval, getDay, format, getYear, parseISO, startOfDay } = require('date-fns');
 
 /**
  * Busca os feriados nacionais de um determinado ano usando a BrasilAPI.
@@ -125,106 +125,235 @@ function isDataValidaInicio(data, funcionario, feriados) {
  */
 async function distribuirFerias(ano, descricao, transaction = null) {
     console.log(`[LOG FÉRIAS SERVICE] Iniciando distribuição de férias para o ano ${ano}...`);
-    const options = transaction ? { transaction } : {};
+    const t = transaction || await sequelize.transaction();
+    const options = { transaction: t };
 
-    await Planejamento.update({ status: 'arquivado' }, { where: { ano, status: 'ativo' }, ...options });
-    
-    const novoPlanejamento = await Planejamento.create({
-        ano,
-        descricao: descricao || `Distribuição automática para ${ano}`,
-        status: 'ativo'
-    }, options);
-    console.log(`[LOG FÉRIAS SERVICE] Novo planejamento ID ${novoPlanejamento.id} criado.`);
+    try {
+        await Planejamento.update({ status: 'arquivado' }, { where: { ano, status: 'ativo' }, ...options });
+        
+        const novoPlanejamento = await Planejamento.create({
+            ano,
+            descricao: descricao || `Distribuição automática para ${ano}`,
+            status: 'ativo'
+        }, options);
+        console.log(`[LOG FÉRIAS SERVICE] Novo planejamento ID ${novoPlanejamento.id} criado.`);
 
-    const funcionariosElegiveis = await Funcionario.findAll({
-        where: {
-            status: 'Ativo',
-            dth_limite_ferias: { [Op.not]: null },
-            situacao_ferias_afastamento_hoje: { [Op.or]: [ { [Op.is]: null }, { [Op.notILike]: '%aviso prévio%' } ] }
-        },
-        include: [{ model: Afastamento, as: 'historicoAfastamentos', required: false }],
-        order: [['dth_limite_ferias', 'ASC']],
-        ...options
-    });
+        const funcionariosElegiveis = await Funcionario.findAll({
+            where: {
+                status: 'Ativo',
+                dth_limite_ferias: { [Op.not]: null },
+                situacao_ferias_afastamento_hoje: { [Op.or]: [ { [Op.is]: null }, { [Op.notILike]: '%aviso prévio%' } ] }
+            },
+            include: [{ model: Afastamento, as: 'historicoAfastamentos', required: false }],
+            order: [['dth_limite_ferias', 'ASC']],
+            ...options
+        });
 
-    console.log(`[LOG FÉRIAS SERVICE] ${funcionariosElegiveis.length} funcionários elegíveis encontrados para o planejamento.`);
-    
-    if (funcionariosElegiveis.length === 0) {
-        return { message: `Planejamento para ${ano} criado, mas nenhum funcionário era elegível para alocação automática.` };
-    }
+        console.log(`[LOG FÉRIAS SERVICE] ${funcionariosElegiveis.length} funcionários elegíveis encontrados para o planejamento.`);
+        
+        if (funcionariosElegiveis.length === 0) {
+            if (!transaction) await t.commit();
+            return { message: `Planejamento para ${ano} criado, mas nenhum funcionário era elegível para alocação automática.` };
+        }
 
-    const feriadosDoAno = await getFeriadosNacionais(ano);
-    const feriasParaCriar = [];
-    const calendarioOcupacao = {};
-    const funcionariosExcluidos = [];
+        const feriadosDoAno = await getFeriadosNacionais(ano);
+        const feriasParaCriar = [];
+        const calendarioOcupacao = {};
+        const funcionariosExcluidos = [];
 
-    for (const funcionario of funcionariosElegiveis) {
-        let excluidoPorAfastamento = false;
-        const hoje = new Date();
-        if (funcionario.historicoAfastamentos && funcionario.historicoAfastamentos.length > 0) {
-            for (const af of funcionario.historicoAfastamentos) {
-                if (!af.data_fim || new Date(af.data_fim) > hoje) {
-                    const inicioAfastamento = new Date(af.data_inicio);
-                    const fimAfastamento = af.data_fim ? new Date(af.data_fim) : addDays(inicioAfastamento, 365);
-                    const duracaoAfastamento = differenceInDays(fimAfastamento, inicioAfastamento);
-                    if (duracaoAfastamento > 15) {
-                        funcionariosExcluidos.push({ matricula: funcionario.matricula, nome: funcionario.nome_funcionario, motivo: `Afastamento ativo superior a 15 dias.` });
-                        excluidoPorAfastamento = true;
-                        break;
+        for (const funcionario of funcionariosElegiveis) {
+            let excluidoPorAfastamento = false;
+            const hoje = new Date();
+            if (funcionario.historicoAfastamentos && funcionario.historicoAfastamentos.length > 0) {
+                for (const af of funcionario.historicoAfastamentos) {
+                    if (!af.data_fim || new Date(af.data_fim) > hoje) {
+                        const inicioAfastamento = new Date(af.data_inicio);
+                        const fimAfastamento = af.data_fim ? new Date(af.data_fim) : addDays(inicioAfastamento, 365);
+                        const duracaoAfastamento = differenceInDays(fimAfastamento, inicioAfastamento);
+                        if (duracaoAfastamento > 15) {
+                            funcionariosExcluidos.push({ matricula: funcionario.matricula, nome: funcionario.nome_funcionario, motivo: `Afastamento ativo superior a 15 dias.` });
+                            excluidoPorAfastamento = true;
+                            break;
+                        }
                     }
                 }
             }
-        }
-        if (excluidoPorAfastamento) continue;
+            if (excluidoPorAfastamento) continue;
 
-        const diasDeFerias = funcionario.saldo_dias_ferias;
-        if (diasDeFerias <= 0) continue;
+            const diasDeFerias = funcionario.saldo_dias_ferias;
+            if (diasDeFerias <= 0) continue;
 
-        let dataInicioEncontrada = false;
-        let dataAtual = new Date() > new Date(funcionario.periodo_aquisitivo_atual_inicio) ? new Date() : new Date(funcionario.periodo_aquisitivo_atual_inicio);
-        const dataLimite = new Date(funcionario.dth_limite_ferias);
+            let dataInicioEncontrada = false;
+            let dataAtual = new Date() > new Date(funcionario.periodo_aquisitivo_atual_inicio) ? new Date() : new Date(funcionario.periodo_aquisitivo_atual_inicio);
+            const dataLimite = new Date(funcionario.dth_limite_ferias);
 
-        while (!dataInicioEncontrada && dataAtual < dataLimite) {
-            if (isDataValidaInicio(format(dataAtual, 'yyyy-MM-dd'), funcionario, feriadosDoAno)) {
-                const mes = dataAtual.toLocaleString('pt-BR', { month: 'long' });
-                const municipio = funcionario.municipio_local_trabalho || 'N/A';
-                const chaveOcupacao = `${municipio}-${mes}`;
-                
-                if (!calendarioOcupacao[chaveOcupacao]) calendarioOcupacao[chaveOcupacao] = 0;
+            while (!dataInicioEncontrada && dataAtual < dataLimite) {
+                if (isDataValidaInicio(format(dataAtual, 'yyyy-MM-dd'), funcionario, feriadosDoAno)) {
+                    const mes = dataAtual.toLocaleString('pt-BR', { month: 'long' });
+                    const municipio = funcionario.municipio_local_trabalho || 'N/A';
+                    const chaveOcupacao = `${municipio}-${mes}`;
+                    
+                    if (!calendarioOcupacao[chaveOcupacao]) calendarioOcupacao[chaveOcupacao] = 0;
 
-                if (calendarioOcupacao[chaveOcupacao] < 5) {
-                    const dataFim = addDays(dataAtual, diasDeFerias - 1);
-                    feriasParaCriar.push({
-                        matricula_funcionario: funcionario.matricula,
-                        planejamentoId: novoPlanejamento.id,
-                        data_inicio: format(dataAtual, 'yyyy-MM-dd'),
-                        data_fim: format(dataFim, 'yyyy-MM-dd'),
-                        qtd_dias: diasDeFerias,
-                        periodo_aquisitivo_inicio: funcionario.periodo_aquisitivo_atual_inicio,
-                        periodo_aquisitivo_fim: funcionario.periodo_aquisitivo_atual_fim,
-                        status: 'Planejada'
-                    });
-                    calendarioOcupacao[chaveOcupacao]++;
-                    dataInicioEncontrada = true;
+                    if (calendarioOcupacao[chaveOcupacao] < 5) {
+                        const dataFim = addDays(dataAtual, diasDeFerias - 1);
+                        feriasParaCriar.push({
+                            matricula_funcionario: funcionario.matricula,
+                            planejamentoId: novoPlanejamento.id,
+                            data_inicio: format(dataAtual, 'yyyy-MM-dd'),
+                            data_fim: format(dataFim, 'yyyy-MM-dd'),
+                            qtd_dias: diasDeFerias,
+                            periodo_aquisitivo_inicio: funcionario.periodo_aquisitivo_atual_inicio,
+                            periodo_aquisitivo_fim: funcionario.periodo_aquisitivo_atual_fim,
+                            status: 'Planejada'
+                        });
+                        calendarioOcupacao[chaveOcupacao]++;
+                        dataInicioEncontrada = true;
+                    }
                 }
+                dataAtual = addDays(dataAtual, 1);
             }
-            dataAtual = addDays(dataAtual, 1);
         }
+
+        console.log(`[LOG FÉRIAS SERVICE] Lógica de distribuição finalizada. ${feriasParaCriar.length} registros de férias serão criados.`);
+
+        if (feriasParaCriar.length > 0) {
+            await Ferias.bulkCreate(feriasParaCriar, options);
+            console.log(`[LOG FÉRIAS SERVICE] ${feriasParaCriar.length} registros de férias inseridos no banco.`);
+        }
+        
+        if (!transaction) await t.commit();
+        
+        return { 
+            message: `Distribuição para ${ano} concluída. ${feriasParaCriar.length} períodos planejados.`,
+            registrosCriados: feriasParaCriar.length,
+            funcionariosExcluidos: funcionariosExcluidos
+        };
+    } catch(error) {
+        if (!transaction) await t.rollback();
+        console.error("Erro na distribuição de férias. Transação revertida.", error);
+        throw error;
     }
-
-    console.log(`[LOG FÉRIAS SERVICE] Lógica de distribuição finalizada. ${feriasParaCriar.length} registros de férias serão criados.`);
-
-    if (feriasParaCriar.length > 0) {
-        await Ferias.bulkCreate(feriasParaCriar, options);
-        console.log(`[LOG FÉRIAS SERVICE] ${feriasParaCriar.length} registros de férias inseridos no banco.`);
-    }
-
-    return { 
-        message: `Distribuição para ${ano} concluída. ${feriasParaCriar.length} períodos planejados.`,
-        registrosCriados: feriasParaCriar.length,
-        funcionariosExcluidos: funcionariosExcluidos
-    };
 }
+
+// ==========================================================
+// NOVA FUNÇÃO
+// ==========================================================
+/**
+ * Redistribui as férias para um grupo selecionado de funcionários dentro de um novo período.
+ */
+const redistribuirFeriasSelecionadas = async (dados) => {
+    const { matriculas, dataInicio, dataFim, descricao } = dados;
+
+    if (!matriculas || matriculas.length === 0) {
+        throw new Error("Nenhuma matrícula de funcionário foi fornecida para a redistribuição.");
+    }
+    if (!dataInicio) {
+        throw new Error("A data de início para a redistribuição é obrigatória.");
+    }
+
+    const t = await sequelize.transaction();
+    const options = { transaction: t };
+
+    try {
+        const ano = getYear(parseISO(dataInicio));
+        const feriadosDoAno = await getFeriadosNacionais(ano);
+
+        const planejamentoAtivo = await Planejamento.findOne({ where: { ano, status: 'ativo' }, ...options });
+        if (!planejamentoAtivo) {
+            throw new Error(`Nenhum planejamento ativo encontrado para o ano ${ano}. Crie um planejamento antes de redistribuir.`);
+        }
+        
+        console.log(`[LOG REDISTRIBUIÇÃO] Removendo ${matriculas.length} férias antigas do planejamento ${planejamentoAtivo.id}.`);
+        await Ferias.destroy({
+            where: {
+                matricula_funcionario: { [Op.in]: matriculas },
+                planejamentoId: planejamentoAtivo.id,
+                status: 'Planejada' // Apenas remove as planejadas, não as já confirmadas ou em gozo
+            },
+            ...options
+        });
+        
+        const funcionariosParaRedistribuir = await Funcionario.findAll({
+            where: { matricula: { [Op.in]: matriculas }, status: 'Ativo' },
+            order: [['dth_limite_ferias', 'ASC']],
+            ...options
+        });
+
+        if (funcionariosParaRedistribuir.length === 0) {
+            await t.commit();
+            return { message: "Nenhum funcionário ativo encontrado para as matrículas fornecidas." };
+        }
+
+        // Pré-carrega o calendário de ocupação com as férias de outros funcionários para evitar conflitos
+        const outrasFerias = await Ferias.findAll({
+            where: {
+                planejamentoId: planejamentoAtivo.id,
+                matricula_funcionario: { [Op.notIn]: matriculas }
+            },
+            ...options
+        });
+        const calendarioOcupacao = {};
+        outrasFerias.forEach(f => {
+            const dataRef = parseISO(f.data_inicio);
+            const mes = dataRef.toLocaleString('pt-BR', { month: 'long' });
+            const municipio = f.Funcionario?.municipio_local_trabalho || 'N/A';
+            const chaveOcupacao = `${municipio}-${mes}`;
+            if (!calendarioOcupacao[chaveOcupacao]) calendarioOcupacao[chaveOcupacao] = 0;
+            calendarioOcupacao[chaveOcupacao]++;
+        });
+
+
+        const novasFeriasParaCriar = [];
+        for (const funcionario of funcionariosParaRedistribuir) {
+            const diasDeFerias = funcionario.saldo_dias_ferias;
+            if (diasDeFerias <= 0) continue;
+
+            let dataInicioEncontrada = false;
+            let dataAtual = startOfDay(parseISO(dataInicio));
+            const dataLimite = dataFim ? startOfDay(parseISO(dataFim)) : new Date(funcionario.dth_limite_ferias);
+
+            while (!dataInicioEncontrada && dataAtual < dataLimite) {
+                if (isDataValidaInicio(format(dataAtual, 'yyyy-MM-dd'), funcionario, feriadosDoAno)) {
+                    const mes = dataAtual.toLocaleString('pt-BR', { month: 'long' });
+                    const municipio = funcionario.municipio_local_trabalho || 'N/A';
+                    const chaveOcupacao = `${municipio}-${mes}`;
+                    
+                    if (!calendarioOcupacao[chaveOcupacao]) calendarioOcupacao[chaveOcupacao] = 0;
+
+                    if (calendarioOcupacao[chaveOcupacao] < 5) {
+                        const dataFimCalculada = addDays(dataAtual, diasDeFerias - 1);
+                        novasFeriasParaCriar.push({
+                            matricula_funcionario: funcionario.matricula,
+                            planejamentoId: planejamentoAtivo.id,
+                            data_inicio: format(dataAtual, 'yyyy-MM-dd'),
+                            data_fim: format(dataFimCalculada, 'yyyy-MM-dd'),
+                            qtd_dias: diasDeFerias,
+                            periodo_aquisitivo_inicio: funcionario.periodo_aquisitivo_atual_inicio,
+                            periodo_aquisitivo_fim: funcionario.periodo_aquisitivo_atual_fim,
+                            status: 'Planejada',
+                            observacao: descricao || 'Redistribuição em massa'
+                        });
+                        calendarioOcupacao[chaveOcupacao]++;
+                        dataInicioEncontrada = true;
+                    }
+                }
+                dataAtual = addDays(dataAtual, 1);
+            }
+        }
+
+        if (novasFeriasParaCriar.length > 0) {
+            await Ferias.bulkCreate(novasFeriasParaCriar, options);
+        }
+
+        await t.commit();
+        return { message: `Redistribuição concluída. ${novasFeriasParaCriar.length} novos períodos de férias planejados.` };
+    } catch (error) {
+        await t.rollback();
+        console.error("Erro na redistribuição de férias. Transação revertida.", error);
+        throw error;
+    }
+};
 
 /**
  * Cria um novo registro de férias, calculando a data de fim.
@@ -314,7 +443,6 @@ const findAllPaginated = async (queryParams) => {
     const offset = (page - 1) * limit;
     const ano = parseInt(queryParams.ano, 10) || new Date().getFullYear();
 
-    // Encontra o ID do planejamento ativo para o ano especificado
     const planejamentoAtivo = await Planejamento.findOne({ where: { ano, status: 'ativo' } });
     if (!planejamentoAtivo) {
         return { data: [], pagination: { totalItems: 0, totalPages: 0, currentPage: 1, limit } };
@@ -323,7 +451,6 @@ const findAllPaginated = async (queryParams) => {
     const whereFuncionario = {};
     const whereFerias = { planejamentoId: planejamentoAtivo.id };
 
-    // --- FILTROS DE FUNCIONÁRIO ---
     if (queryParams.q) { whereFuncionario[Op.or] = [{ nome_funcionario: { [Op.iLike]: `%${queryParams.q}%` } }, { matricula: { [Op.iLike]: `%${queryParams.q}%` } }]; }
     if (queryParams.matricula) { whereFuncionario.matricula = { [Op.iLike]: `%${queryParams.matricula}%` }; }
     if (queryParams.status) { whereFuncionario.status = queryParams.status; }
@@ -331,7 +458,6 @@ const findAllPaginated = async (queryParams) => {
     if (queryParams.des_grupo_contrato) { whereFuncionario.des_grupo_contrato = { [Op.iLike]: `%${queryParams.des_grupo_contrato}%` }; }
     if (queryParams.municipio_local_trabalho) { whereFuncionario.municipio_local_trabalho = { [Op.iLike]: `%${queryParams.municipio_local_trabalho}%` }; }
     
-    // --- FILTROS ESPECÍFICOS DE FÉRIAS ---
     if (queryParams.status_ferias) { whereFerias.status = queryParams.status_ferias; }
     if (queryParams.ferias_inicio_de && queryParams.ferias_inicio_ate) {
         whereFerias.data_inicio = { [Op.between]: [new Date(queryParams.ferias_inicio_de), new Date(queryParams.ferias_inicio_ate)] };
@@ -363,10 +489,11 @@ const findAllPaginated = async (queryParams) => {
 module.exports = {
     recalcularPeriodoAquisitivo,
     distribuirFerias,
-    findAllPaginated, // Exporta a nova função de listagem
+    redistribuirFeriasSelecionadas, // Exporta a nova função
+    findAllPaginated,
     create,
     update,
     remove,
     bulkRemove, 
-    findAll// Exporta a função de exclusão em massa
+    findAll
 };
