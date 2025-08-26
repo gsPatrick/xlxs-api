@@ -171,9 +171,9 @@ async function distribuirFerias(ano, descricao, options = {}) {
 
             let dataInicioEncontrada = false;
             
-            // LÓGICA DE DATAS RESTAURADA E MELHORADA
+            // Lógica de datas restaurada e melhorada
             let dataAtual;
-            if (dataInicioDist) {
+            if (dataInicioDist && isValid(parseISO(dataInicioDist))) {
                 dataAtual = startOfDay(parseISO(dataInicioDist));
             } else {
                 const hoje = startOfDay(new Date());
@@ -181,7 +181,7 @@ async function distribuirFerias(ano, descricao, options = {}) {
                 dataAtual = hoje > inicioPeriodoAquisitivo ? hoje : inicioPeriodoAquisitivo;
             }
 
-            const dataLimiteBusca = dataFimDist 
+            const dataLimiteBusca = dataFimDist && isValid(parseISO(dataFimDist))
                 ? startOfDay(parseISO(dataFimDist)) 
                 : startOfDay(new Date(funcionario.dth_limite_ferias));
 
@@ -231,7 +231,6 @@ async function distribuirFerias(ano, descricao, options = {}) {
         throw error;
     }
 }
-
 
 // ==========================================================
 // NOVA FUNÇÃO

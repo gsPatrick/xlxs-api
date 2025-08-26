@@ -5,9 +5,6 @@ const { Funcionario, Ferias, Afastamento, sequelize } = require('../../models');
 const feriasService = require('../ferias/ferias.service');
 const fs = require('fs');
 const XLSX = require('xlsx');
-// ==========================================================
-// CORREÇÃO AQUI: Adicionando 'isValid' à importação
-// ==========================================================
 const { parse, addDays, getYear, isValid, parseISO } = require('date-fns');
 
 const normalizeHeader = (header) => {
@@ -95,7 +92,7 @@ const importFromXLSX = async (filePath, options = {}) => {
                 if (funcionarioMapeado[campoData]) {
                     const dataString = String(funcionarioMapeado[campoData]);
                     const dataObj = parse(dataString, 'dd/MM/yyyy', new Date());
-                    if (!isValid(dataObj)) { // Agora a função existe
+                    if (!isValid(dataObj)) {
                         console.warn(`[AVISO] Linha ${linhaNumero}: Formato de data inválido para '${campoData}' com valor '${dataString}'. Pulando linha.`);
                         dataInvalida = true;
                         break;
@@ -122,7 +119,7 @@ const importFromXLSX = async (filePath, options = {}) => {
                 if (match && match[1] && match[2]) {
                     const dataInicio = parse(match[1], 'dd/MM/yyyy', new Date());
                     const dataFim = parse(match[2], 'dd/MM/yyyy', new Date());
-                    if (isValid(dataInicio) && isValid(dataFim)) { // Agora a função existe
+                    if (isValid(dataInicio) && isValid(dataFim)) {
                         afastamentosParaCriar.push({
                             matricula_funcionario: funcionarioMapeado.matricula,
                             motivo: 'Afastamento importado da planilha',
@@ -175,7 +172,9 @@ const importFromXLSX = async (filePath, options = {}) => {
             console.log(`[LOG FUNCIONARIO SERVICE] ${desativados} funcionários foram desativados.`);
         }
         
-        const anoParaDistribuicao = data_inicio_distribuicao ? getYear(parseISO(data_inicio_distribuicao)) : new Date().getFullYear();
+        const anoParaDistribuicao = data_inicio_distribuicao && isValid(parseISO(data_inicio_distribuicao)) 
+            ? getYear(parseISO(data_inicio_distribuicao)) 
+            : new Date().getFullYear();
         
         await feriasService.distribuirFerias(anoParaDistribuicao, `Planejamento gerado após importação`, {
             transaction: t,
