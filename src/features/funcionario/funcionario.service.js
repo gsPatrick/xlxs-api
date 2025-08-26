@@ -5,7 +5,7 @@ const { Funcionario, Ferias, Afastamento, sequelize } = require('../../models');
 const feriasService = require('../ferias/ferias.service');
 const fs = require('fs');
 const XLSX = require('xlsx');
-const { parse, addDays, getYear, isValid } = require('date-fns');
+const { parse, addDays } = require('date-fns');
 
 const normalizeHeader = (header) => {
     if (!header) return '';
@@ -48,7 +48,7 @@ const columnMapping = {
 
 const importFromXLSX = async (filePath, options = {}) => {
     const { data_inicio_distribuicao, data_fim_distribuicao } = options;
-    console.log(`[LOG FUNCIONARIO SERVICE] Iniciando importação para: ${filePath}`);
+    console.log(`[LOG FUNCIONARIO SERVICE] Iniciando processo de importação para: ${filePath}`);
     const t = await sequelize.transaction();
 
     try {
@@ -92,7 +92,7 @@ const importFromXLSX = async (filePath, options = {}) => {
                 if (funcionarioMapeado[campoData]) {
                     const dataString = String(funcionarioMapeado[campoData]);
                     const dataObj = parse(dataString, 'dd/MM/yyyy', new Date());
-                    if (isNaN(dataObj.getTime()) || !isValid(dataObj)) {
+                    if (!isValid(dataObj)) {
                         console.warn(`[AVISO] Linha ${linhaNumero}: Formato de data inválido para '${campoData}' com valor '${dataString}'. Pulando linha.`);
                         dataInvalida = true;
                         break;
@@ -119,7 +119,7 @@ const importFromXLSX = async (filePath, options = {}) => {
                 if (match && match[1] && match[2]) {
                     const dataInicio = parse(match[1], 'dd/MM/yyyy', new Date());
                     const dataFim = parse(match[2], 'dd/MM/yyyy', new Date());
-                    if (!isNaN(dataInicio.getTime()) && !isNaN(dataFim.getTime())) {
+                    if (isValid(dataInicio) && isValid(dataFim)) {
                         afastamentosParaCriar.push({
                             matricula_funcionario: funcionarioMapeado.matricula,
                             motivo: 'Afastamento importado da planilha',
@@ -136,10 +136,10 @@ const importFromXLSX = async (filePath, options = {}) => {
             matriculasDaPlanilha.add(String(funcionarioMapeado.matricula));
         }
         
-        console.log(`[LOG FUNCIONARIO SERVICE] Processamento concluído. ${funcionariosParaProcessar.length} registros válidos. ${linhasInvalidas} linhas inválidas (ou em branco) puladas.`);
+        console.log(`[LOG FUNCIONARIO SERVICE] Processamento concluído. ${funcionariosParaProcessar.length} registros válidos. ${linhasInvalidas} linhas inválidas puladas.`);
 
         if (funcionariosParaProcessar.length === 0) {
-            throw new Error(`Nenhum registro válido foi encontrado. Verifique se a planilha contém linhas em branco ou se os cabeçalhos 'Matricula' e 'DthAdmissao' estão corretos. Veja o log de [DIAGNÓSTICO] no terminal.`);
+            throw new Error(`Nenhum registro válido foi encontrado. Verifique os cabeçalhos 'Matricula' e 'DthAdmissao'.`);
         }
         
         await Funcionario.bulkCreate(funcionariosParaProcessar, {
@@ -169,12 +169,14 @@ const importFromXLSX = async (filePath, options = {}) => {
                 { where: { matricula: { [Op.in]: matriculasParaDesativar } }, transaction: t }
             );
             desativados = updateCount;
-            console.log(`[LOG FUNCIONARIO SERVICE] ${desativados} funcionários foram desativados por não estarem na planilha.`);
+            console.log(`[LOG FUNCIONARIO SERVICE] ${desativados} funcionários foram desativados.`);
         }
         
-        const anoDistribuicao = data_inicio_distribuicao ? getYear(parseISO(data_inicio_distribuicao)) : new Date().getFullYear();
+        // Define o ano para a distribuição. Se uma data de início for fornecida, usa o ano dessa data.
+        // Caso contrário, usa o ano atual.
+        const anoParaDistribuicao = data_inicio_distribuicao ? getYear(parseISO(data_inicio_distribuicao)) : new Date().getFullYear();
         
-        await feriasService.distribuirFerias(anoDistribuicao, `Planejamento gerado após importação`, {
+        await feriasService.distribuirFerias(anoParaDistribuicao, `Planejamento gerado após importação`, {
             transaction: t,
             dataInicioDist: data_inicio_distribuicao,
             dataFimDist: data_fim_distribuicao
@@ -183,7 +185,7 @@ const importFromXLSX = async (filePath, options = {}) => {
         await t.commit();
         
         fs.unlinkSync(filePath);
-        return { message: `Importação concluída! ${funcionariosParaProcessar.length} funcionários processados. ${desativados} foram desativados. ${afastamentosParaCriar.length} afastamentos registrados. Um novo planejamento de férias foi gerado.` };
+        return { message: `Importação concluída! ${funcionariosParaProcessar.length} funcionários processados. ${desativados} desativados. ${afastamentosParaCriar.length} afastamentos registrados. Um novo planejamento de férias foi gerado.` };
 
     } catch (err) {
         await t.rollback();
@@ -192,6 +194,7 @@ const importFromXLSX = async (filePath, options = {}) => {
         throw new Error(err.message || "Ocorreu um erro crítico durante a importação.");
     }
 };
+
 
 const findAll = async (queryParams) => {
     const page = parseInt(queryParams.page, 10) || 1;
@@ -270,56 +273,6 @@ const exportAllToXLSX = async () => {
   return { buffer, fileName: 'Relatorio_Completo_Funcionarios.xlsx' };
 };
 
-const getFilterOptions = async () => {
-    try {
-        const municipios = await Funcionario.findAll({
-            attributes: [[sequelize.fn('DISTINCT', sequelize.col('municipio_local_trabalho')), 'municipio_local_trabalho']],
-            where: { municipio_local_trabalho: { [Op.not]: null } },
-            order: [['municipio_local_trabalho', 'ASC']],
-            raw: true
-        });
-
-        const gestoes = await Funcionario.findAll({
-            attributes: [[sequelize.fn('DISTINCT', sequelize.col('des_grupo_contrato')), 'des_grupo_contrato']],
-            where: { des_grupo_contrato: { [Op.not]: null } },
-            order: [['des_grupo_contrato', 'ASC']],
-            raw: true
-        });
-
-        const categorias = await Funcionario.findAll({
-            attributes: [[sequelize.fn('DISTINCT', sequelize.col('categoria')), 'categoria']],
-            where: { categoria: { [Op.not]: null } },
-            order: [['categoria', 'ASC']],
-            raw: true
-        });
-        
-        const estados = await Funcionario.findAll({
-            attributes: [[sequelize.fn('DISTINCT', sequelize.col('sigla_local')), 'sigla_local']],
-            where: { sigla_local: { [Op.not]: null } },
-            order: [['sigla_local', 'ASC']],
-            raw: true
-        });
-
-        const escalas = await Funcionario.findAll({
-            attributes: [[sequelize.fn('DISTINCT', sequelize.col('escala')), 'escala']],
-            where: { escala: { [Op.not]: null } },
-            order: [['escala', 'ASC']],
-            raw: true
-        });
-
-        return {
-            municipios: municipios.map(item => item.municipio_local_trabalho),
-            gestoes: gestoes.map(item => item.des_grupo_contrato),
-            categorias: categorias.map(item => item.categoria),
-            estados: estados.map(item => item.sigla_local),
-            escalas: escalas.map(item => item.escala),
-        };
-    } catch (error) {
-        console.error("Erro ao buscar opções de filtro:", error);
-        throw new Error("Não foi possível carregar as opções de filtro.");
-    }
-};
-
 module.exports = {
   importFromXLSX,
   findAll,
@@ -328,5 +281,4 @@ module.exports = {
   update,
   remove,
   exportAllToXLSX,
-  getFilterOptions,
 };
