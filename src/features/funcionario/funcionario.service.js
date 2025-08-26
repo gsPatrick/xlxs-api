@@ -5,7 +5,10 @@ const { Funcionario, Ferias, Afastamento, sequelize } = require('../../models');
 const feriasService = require('../ferias/ferias.service');
 const fs = require('fs');
 const XLSX = require('xlsx');
-const { parse, addDays } = require('date-fns');
+// ==========================================================
+// CORREÇÃO AQUI: Adicionando 'isValid' à importação
+// ==========================================================
+const { parse, addDays, getYear, isValid, parseISO } = require('date-fns');
 
 const normalizeHeader = (header) => {
     if (!header) return '';
@@ -92,7 +95,7 @@ const importFromXLSX = async (filePath, options = {}) => {
                 if (funcionarioMapeado[campoData]) {
                     const dataString = String(funcionarioMapeado[campoData]);
                     const dataObj = parse(dataString, 'dd/MM/yyyy', new Date());
-                    if (!isValid(dataObj)) {
+                    if (!isValid(dataObj)) { // Agora a função existe
                         console.warn(`[AVISO] Linha ${linhaNumero}: Formato de data inválido para '${campoData}' com valor '${dataString}'. Pulando linha.`);
                         dataInvalida = true;
                         break;
@@ -119,7 +122,7 @@ const importFromXLSX = async (filePath, options = {}) => {
                 if (match && match[1] && match[2]) {
                     const dataInicio = parse(match[1], 'dd/MM/yyyy', new Date());
                     const dataFim = parse(match[2], 'dd/MM/yyyy', new Date());
-                    if (isValid(dataInicio) && isValid(dataFim)) {
+                    if (isValid(dataInicio) && isValid(dataFim)) { // Agora a função existe
                         afastamentosParaCriar.push({
                             matricula_funcionario: funcionarioMapeado.matricula,
                             motivo: 'Afastamento importado da planilha',
@@ -172,8 +175,6 @@ const importFromXLSX = async (filePath, options = {}) => {
             console.log(`[LOG FUNCIONARIO SERVICE] ${desativados} funcionários foram desativados.`);
         }
         
-        // Define o ano para a distribuição. Se uma data de início for fornecida, usa o ano dessa data.
-        // Caso contrário, usa o ano atual.
         const anoParaDistribuicao = data_inicio_distribuicao ? getYear(parseISO(data_inicio_distribuicao)) : new Date().getFullYear();
         
         await feriasService.distribuirFerias(anoParaDistribuicao, `Planejamento gerado após importação`, {
@@ -194,7 +195,6 @@ const importFromXLSX = async (filePath, options = {}) => {
         throw new Error(err.message || "Ocorreu um erro crítico durante a importação.");
     }
 };
-
 
 const findAll = async (queryParams) => {
     const page = parseInt(queryParams.page, 10) || 1;
@@ -273,6 +273,56 @@ const exportAllToXLSX = async () => {
   return { buffer, fileName: 'Relatorio_Completo_Funcionarios.xlsx' };
 };
 
+const getFilterOptions = async () => {
+    try {
+        const municipios = await Funcionario.findAll({
+            attributes: [[sequelize.fn('DISTINCT', sequelize.col('municipio_local_trabalho')), 'municipio_local_trabalho']],
+            where: { municipio_local_trabalho: { [Op.not]: null } },
+            order: [['municipio_local_trabalho', 'ASC']],
+            raw: true
+        });
+
+        const gestoes = await Funcionario.findAll({
+            attributes: [[sequelize.fn('DISTINCT', sequelize.col('des_grupo_contrato')), 'des_grupo_contrato']],
+            where: { des_grupo_contrato: { [Op.not]: null } },
+            order: [['des_grupo_contrato', 'ASC']],
+            raw: true
+        });
+
+        const categorias = await Funcionario.findAll({
+            attributes: [[sequelize.fn('DISTINCT', sequelize.col('categoria')), 'categoria']],
+            where: { categoria: { [Op.not]: null } },
+            order: [['categoria', 'ASC']],
+            raw: true
+        });
+        
+        const estados = await Funcionario.findAll({
+            attributes: [[sequelize.fn('DISTINCT', sequelize.col('sigla_local')), 'sigla_local']],
+            where: { sigla_local: { [Op.not]: null } },
+            order: [['sigla_local', 'ASC']],
+            raw: true
+        });
+
+        const escalas = await Funcionario.findAll({
+            attributes: [[sequelize.fn('DISTINCT', sequelize.col('escala')), 'escala']],
+            where: { escala: { [Op.not]: null } },
+            order: [['escala', 'ASC']],
+            raw: true
+        });
+
+        return {
+            municipios: municipios.map(item => item.municipio_local_trabalho),
+            gestoes: gestoes.map(item => item.des_grupo_contrato),
+            categorias: categorias.map(item => item.categoria),
+            estados: estados.map(item => item.sigla_local),
+            escalas: escalas.map(item => item.escala),
+        };
+    } catch (error) {
+        console.error("Erro ao buscar opções de filtro:", error);
+        throw new Error("Não foi possível carregar as opções de filtro.");
+    }
+};
+
 module.exports = {
   importFromXLSX,
   findAll,
@@ -281,4 +331,5 @@ module.exports = {
   update,
   remove,
   exportAllToXLSX,
+  getFilterOptions,
 };
