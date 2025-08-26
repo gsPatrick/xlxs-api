@@ -117,38 +117,9 @@ function isDataValidaInicio(data, funcionario, feriados) {
     return true;
 };
 
-/**
- * Função auxiliar para verificar se a data de início das férias é válida.
- */
-function isDataValidaInicio(data, funcionario, feriados) {
-    const dataChecagem = new Date(`${data}T12:00:00Z`);
-    const diaDaSemana = getDay(dataChecagem);
-
-    const convencoesExcecao = ['SEEACEPI', 'SECAPI Interior'];
-    if (funcionario.convencao && convencoesExcecao.some(c => funcionario.convencao.includes(c))) {
-        return diaDaSemana !== 0;
-    }
-
-    if (diaDaSemana === 6 || diaDaSemana === 0 || diaDaSemana === 5) {
-        return false;
-    }
-
-    const diaSeguinte = format(addDays(dataChecagem, 1), 'yyyy-MM-dd');
-    const doisDiasDepois = format(addDays(dataChecagem, 2), 'yyyy-MM-dd');
-
-    if (feriados.includes(diaSeguinte) || feriados.includes(doisDiasDepois)) {
-        return false;
-    }
-    
-    return true;
-};
-
-/**
- * Orquestra a criação de um novo planejamento de férias para um ano.
- */
 async function distribuirFerias(ano, descricao, options = {}) {
     const { transaction, dataInicioDist, dataFimDist } = options;
-    console.log(`[LOG FÉRIAS SERVICE] Iniciando distribuição para o ano ${ano}. Período customizado: ${dataInicioDist || 'N/A'} a ${dataFimDist || 'N/A'}`);
+    console.log(`[LOG FÉRIAS SERVICE] Iniciando distribuição para o ano ${ano}. Período customizado: Início=${dataInicioDist || 'N/A'}, Fim=${dataFimDist || 'N/A'}`);
 
     const t = transaction || await sequelize.transaction();
     const transactionOptions = { transaction: t };
@@ -190,14 +161,19 @@ async function distribuirFerias(ano, descricao, options = {}) {
             if (diasDeFerias <= 0) continue;
 
             let dataInicioEncontrada = false;
-            // Define a data de início da busca: ou a data customizada ou a data de hoje/início do período aquisitivo
-            let dataAtual = dataInicioDist 
-                ? startOfDay(parseISO(dataInicioDist))
-                : (new Date() > new Date(funcionario.periodo_aquisitivo_atual_inicio) ? new Date() : new Date(funcionario.periodo_aquisitivo_atual_inicio));
+            
+            // Lógica robusta para definir o início e o fim da busca
+            let dataAtual;
+            if (dataInicioDist) {
+                dataAtual = startOfDay(parseISO(dataInicioDist));
+            } else {
+                const hoje = new Date();
+                const inicioPeriodoAquisitivo = new Date(funcionario.periodo_aquisitivo_atual_inicio);
+                dataAtual = hoje > inicioPeriodoAquisitivo ? hoje : inicioPeriodoAquisitivo;
+            }
 
-            // Define a data limite da busca: ou a data customizada ou a data limite de férias do funcionário
-            const dataLimiteBusca = dataFimDist
-                ? startOfDay(parseISO(dataFimDist))
+            const dataLimiteBusca = dataFimDist 
+                ? startOfDay(parseISO(dataFimDist)) 
                 : new Date(funcionario.dth_limite_ferias);
 
             while (!dataInicioEncontrada && dataAtual < dataLimiteBusca) {
@@ -245,6 +221,60 @@ async function distribuirFerias(ano, descricao, options = {}) {
         throw error;
     }
 }
+
+
+function isDataValidaInicio(data, funcionario, feriados) {
+    const dataChecagem = new Date(`${data}T12:00:00Z`);
+    const diaDaSemana = getDay(dataChecagem);
+
+    const convencoesExcecao = ['SEEACEPI', 'SECAPI Interior'];
+    if (funcionario.convencao && convencoesExcecao.some(c => funcionario.convencao.includes(c))) {
+        return diaDaSemana !== 0;
+    }
+
+    if (diaDaSemana === 6 || diaDaSemana === 0 || diaDaSemana === 5) {
+        return false;
+    }
+
+    const diaSeguinte = format(addDays(dataChecagem, 1), 'yyyy-MM-dd');
+    const doisDiasDepois = format(addDays(dataChecagem, 2), 'yyyy-MM-dd');
+
+    if (feriados.includes(diaSeguinte) || feriados.includes(doisDiasDepois)) {
+        return false;
+    }
+    
+    return true;
+};
+
+/**
+ * Função auxiliar para verificar se a data de início das férias é válida.
+ */
+function isDataValidaInicio(data, funcionario, feriados) {
+    const dataChecagem = new Date(`${data}T12:00:00Z`);
+    const diaDaSemana = getDay(dataChecagem);
+
+    const convencoesExcecao = ['SEEACEPI', 'SECAPI Interior'];
+    if (funcionario.convencao && convencoesExcecao.some(c => funcionario.convencao.includes(c))) {
+        return diaDaSemana !== 0;
+    }
+
+    if (diaDaSemana === 6 || diaDaSemana === 0 || diaDaSemana === 5) {
+        return false;
+    }
+
+    const diaSeguinte = format(addDays(dataChecagem, 1), 'yyyy-MM-dd');
+    const doisDiasDepois = format(addDays(dataChecagem, 2), 'yyyy-MM-dd');
+
+    if (feriados.includes(diaSeguinte) || feriados.includes(doisDiasDepois)) {
+        return false;
+    }
+    
+    return true;
+};
+
+/**
+ * Orquestra a criação de um novo planejamento de férias para um ano.
+ */
 
 // ==========================================================
 // NOVA FUNÇÃO

@@ -5,7 +5,7 @@ const { Funcionario, Ferias, Afastamento, sequelize } = require('../../models');
 const feriasService = require('../ferias/ferias.service');
 const fs = require('fs');
 const XLSX = require('xlsx');
-const { parse, addDays } = require('date-fns');
+const { parse, addDays, getYear, isValid } = require('date-fns');
 
 const normalizeHeader = (header) => {
     if (!header) return '';
@@ -57,11 +57,12 @@ const importFromXLSX = async (filePath, options = {}) => {
         const worksheet = workbook.Sheets[sheetName];
         
         const headersRaw = XLSX.utils.sheet_to_json(worksheet, { header: 1, range: 1, raw: true })[0];
-        console.log('[DIAGNÓSTICO] Cabeçalhos lidos:', headersRaw);
+        console.log('[DIAGNÓSTICO] Cabeçalhos lidos da planilha (Linha 2):', headersRaw);
+        console.log('[DIAGNÓSTICO] Cabeçalhos normalizados que o sistema irá usar:', headersRaw.map(normalizeHeader));
 
         const data = XLSX.utils.sheet_to_json(worksheet, { range: 1, raw: false, dateNF: 'dd/MM/yyyy' });
         
-        console.log(`[LOG FUNCIONARIO SERVICE] ${data.length} linhas de dados encontradas.`);
+        console.log(`[LOG FUNCIONARIO SERVICE] Planilha lida. ${data.length} linhas de dados encontradas.`);
         
         const funcionariosParaProcessar = [];
         const afastamentosParaCriar = [];
@@ -71,6 +72,7 @@ const importFromXLSX = async (filePath, options = {}) => {
         for (let i = 0; i < data.length; i++) {
             const row = data[i];
             const linhaNumero = i + 3;
+
             const funcionarioMapeado = {};
             for (const key in row) {
                 const normalizedKey = normalizeHeader(key);
@@ -90,8 +92,8 @@ const importFromXLSX = async (filePath, options = {}) => {
                 if (funcionarioMapeado[campoData]) {
                     const dataString = String(funcionarioMapeado[campoData]);
                     const dataObj = parse(dataString, 'dd/MM/yyyy', new Date());
-                    if (isNaN(dataObj.getTime())) {
-                        console.warn(`[AVISO] Linha ${linhaNumero}: Data inválida para '${campoData}' valor '${dataString}'. Pulando.`);
+                    if (isNaN(dataObj.getTime()) || !isValid(dataObj)) {
+                        console.warn(`[AVISO] Linha ${linhaNumero}: Formato de data inválido para '${campoData}' com valor '${dataString}'. Pulando linha.`);
                         dataInvalida = true;
                         break;
                     }
@@ -105,9 +107,9 @@ const importFromXLSX = async (filePath, options = {}) => {
             
             const faltas = parseInt(funcionarioMapeado.faltas_injustificadas_periodo, 10) || 0;
             if (faltas <= 5) funcionarioMapeado.saldo_dias_ferias = 30;
-            else if (faltas <= 14) funcionarioMapeado.saldo_dias_ferias = 24;
-            else if (faltas <= 23) funcionarioMapeado.saldo_dias_ferias = 18;
-            else if (faltas <= 32) funcionarioMapeado.saldo_dias_ferias = 12;
+            else if (faltas >= 6 && faltas <= 14) funcionarioMapeado.saldo_dias_ferias = 24;
+            else if (faltas >= 15 && faltas <= 23) funcionarioMapeado.saldo_dias_ferias = 18;
+            else if (faltas >= 24 && faltas <= 32) funcionarioMapeado.saldo_dias_ferias = 12;
             else funcionarioMapeado.saldo_dias_ferias = 0;
 
             const situacao = funcionarioMapeado.situacao_ferias_afastamento_hoje;
@@ -134,10 +136,10 @@ const importFromXLSX = async (filePath, options = {}) => {
             matriculasDaPlanilha.add(String(funcionarioMapeado.matricula));
         }
         
-        console.log(`[LOG FUNCIONARIO SERVICE] Processamento concluído. ${funcionariosParaProcessar.length} válidos. ${linhasInvalidas} inválidas.`);
+        console.log(`[LOG FUNCIONARIO SERVICE] Processamento concluído. ${funcionariosParaProcessar.length} registros válidos. ${linhasInvalidas} linhas inválidas (ou em branco) puladas.`);
 
         if (funcionariosParaProcessar.length === 0) {
-            throw new Error(`Nenhum registro válido encontrado.`);
+            throw new Error(`Nenhum registro válido foi encontrado. Verifique se a planilha contém linhas em branco ou se os cabeçalhos 'Matricula' e 'DthAdmissao' estão corretos. Veja o log de [DIAGNÓSTICO] no terminal.`);
         }
         
         await Funcionario.bulkCreate(funcionariosParaProcessar, {
@@ -145,14 +147,14 @@ const importFromXLSX = async (filePath, options = {}) => {
             updateOnDuplicate: Object.values(columnMapping).filter(field => field !== 'matricula')
         });
         
-        console.log(`[LOG FUNCIONARIO SERVICE] ${funcionariosParaProcessar.length} funcionários criados/atualizados.`);
+        console.log(`[LOG FUNCIONARIO SERVICE] ${funcionariosParaProcessar.length} funcionários criados ou atualizados.`);
         
         if (afastamentosParaCriar.length > 0) {
             await Afastamento.bulkCreate(afastamentosParaCriar, {
                 transaction: t,
                 updateOnDuplicate: ['data_fim', 'motivo', 'impacta_ferias'],
             });
-            console.log(`[LOG FUNCIONARIO SERVICE] ${afastamentosParaCriar.length} afastamentos criados/atualizados.`);
+            console.log(`[LOG FUNCIONARIO SERVICE] ${afastamentosParaCriar.length} afastamentos criados ou atualizados.`);
         }
 
         const funcionariosNoBanco = await Funcionario.findAll({ attributes: ['matricula'], where: { status: 'Ativo' }, transaction: t, raw: true });
@@ -167,7 +169,7 @@ const importFromXLSX = async (filePath, options = {}) => {
                 { where: { matricula: { [Op.in]: matriculasParaDesativar } }, transaction: t }
             );
             desativados = updateCount;
-            console.log(`[LOG FUNCIONARIO SERVICE] ${desativados} funcionários desativados.`);
+            console.log(`[LOG FUNCIONARIO SERVICE] ${desativados} funcionários foram desativados por não estarem na planilha.`);
         }
         
         const anoDistribuicao = data_inicio_distribuicao ? getYear(parseISO(data_inicio_distribuicao)) : new Date().getFullYear();
@@ -185,7 +187,7 @@ const importFromXLSX = async (filePath, options = {}) => {
 
     } catch (err) {
         await t.rollback();
-        console.error("[ERRO FATAL SERVICE] Transação revertida.", err);
+        console.error("[ERRO FATAL SERVICE] A transação foi revertida.", err);
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
         throw new Error(err.message || "Ocorreu um erro crítico durante a importação.");
     }
@@ -268,9 +270,6 @@ const exportAllToXLSX = async () => {
   return { buffer, fileName: 'Relatorio_Completo_Funcionarios.xlsx' };
 };
 
-// ==========================================================
-// NOVA FUNÇÃO PARA BUSCAR OPÇÕES DE FILTRO
-// ==========================================================
 const getFilterOptions = async () => {
     try {
         const municipios = await Funcionario.findAll({
@@ -321,7 +320,6 @@ const getFilterOptions = async () => {
     }
 };
 
-
 module.exports = {
   importFromXLSX,
   findAll,
@@ -330,5 +328,5 @@ module.exports = {
   update,
   remove,
   exportAllToXLSX,
-  getFilterOptions, // Exporta a nova função
+  getFilterOptions,
 };
