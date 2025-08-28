@@ -47,6 +47,11 @@ const Funcionario = sequelize.define('Funcionario', {
   qtd_periodos_incompletos: { type: DataTypes.INTEGER },
   qtd_periodos_individuais: { type: DataTypes.INTEGER },
   qtd_periodos_coletivos: { type: DataTypes.INTEGER },
+    // ==========================================================
+  // NOVOS CAMPOS ADICIONADOS AQUI
+  // ==========================================================
+  cliente: { type: DataTypes.STRING, allowNull: true },
+  contrato: { type: DataTypes.STRING, allowNull: true },
 }, {
   tableName: 'funcionarios',
 });

@@ -70,29 +70,21 @@ const getVisaoGeral = async (queryParams) => {
     const inicioMes = startOfMonth(dataReferencia);
     const fimMes = endOfMonth(dataReferencia);
 
-    // ==========================================================
-    // FILTROS EXPANDIDOS (PONTO #5 DO FEEDBACK)
-    // ==========================================================
     const whereFuncionario = {};
     if (queryParams.grupoContrato) { whereFuncionario.des_grupo_contrato = queryParams.grupoContrato; }
     if (queryParams.municipio) { whereFuncionario.municipio_local_trabalho = queryParams.municipio; }
     if (queryParams.categoria) { whereFuncionario.categoria = queryParams.categoria; }
     if (queryParams.tipoContrato) { whereFuncionario.categoria_trab = queryParams.tipoContrato; }
     if (queryParams.estado) { whereFuncionario.sigla_local = queryParams.estado; }
-    // Adicionar filtros para 'Cliente' e 'Contrato' se esses campos existirem no modelo Funcionario
-    // if (queryParams.cliente) { whereFuncionario.cliente = queryParams.cliente; }
-    // if (queryParams.contrato) { whereFuncionario.contrato = queryParams.contrato; }
-
+    if (queryParams.cliente) { whereFuncionario.cliente = queryParams.cliente; } // NOVO FILTRO
+    if (queryParams.contrato) { whereFuncionario.contrato = queryParams.contrato; } // NOVO FILTRO
 
     const feriasNoMes = await Ferias.findAll({
         where: {
             [Op.or]: [
                 { data_inicio: { [Op.between]: [inicioMes, fimMes] } },
                 { data_fim: { [Op.between]: [inicioMes, fimMes] } },
-                { [Op.and]: [
-                    { data_inicio: { [Op.lte]: inicioMes } },
-                    { data_fim: { [Op.gte]: fimMes } }
-                ]}
+                { [Op.and]: [ { data_inicio: { [Op.lte]: inicioMes } }, { data_fim: { [Op.gte]: fimMes } } ]}
             ]
         },
         include: [{ 
@@ -108,10 +100,7 @@ const getVisaoGeral = async (queryParams) => {
             [Op.or]: [
                 { data_inicio: { [Op.between]: [inicioMes, fimMes] } },
                 { data_fim: { [Op.between]: [inicioMes, fimMes] } },
-                { [Op.and]: [
-                    { data_inicio: { [Op.lte]: inicioMes } },
-                    { data_fim: { [Op.gte]: fimMes } }
-                ]}
+                { [Op.and]: [ { data_inicio: { [Op.lte]: inicioMes } }, { data_fim: { [Op.gte]: fimMes } } ]}
             ]
         },
         include: [{ 
@@ -125,25 +114,15 @@ const getVisaoGeral = async (queryParams) => {
     const eventos = [];
     feriasNoMes.forEach(f => {
         eventos.push({
-            id: `ferias-${f.id}`,
-            tipo: 'Férias',
-            data_inicio: f.data_inicio,
-            data_fim: f.data_fim,
-            status: f.status,
-            funcionario: f.Funcionario.nome_funcionario,
-            matricula: f.matricula_funcionario
+            id: `ferias-${f.id}`, tipo: 'Férias', data_inicio: f.data_inicio, data_fim: f.data_fim, status: f.status,
+            funcionario: f.Funcionario.nome_funcionario, matricula: f.matricula_funcionario
         });
     });
 
     afastamentosNoMes.forEach(a => {
         eventos.push({
-            id: `afastamento-${a.id}`,
-            tipo: 'Afastamento',
-            data_inicio: a.data_inicio,
-            data_fim: a.data_fim,
-            status: a.motivo,
-            funcionario: a.Funcionario.nome_funcionario,
-            matricula: a.matricula_funcionario
+            id: `afastamento-${a.id}`, tipo: 'Afastamento', data_inicio: a.data_inicio, data_fim: a.data_fim, status: a.motivo,
+            funcionario: a.Funcionario.nome_funcionario, matricula: a.matricula_funcionario
         });
     });
 
@@ -151,6 +130,7 @@ const getVisaoGeral = async (queryParams) => {
 
     return eventos;
 };
+
 
 
 module.exports = {

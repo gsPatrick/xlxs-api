@@ -38,13 +38,17 @@ const columnMapping = {
     'categoriatrab': 'categoria_trab',
     'horario': 'horario',
     'escala': 'escala',
+    'municipiolocaltrabalho': 'municipio_local_trabalho', // CORREÇÃO APLICADA
     'siglalocal': 'sigla_local',
     'desgrupocontrato': 'des_grupo_contrato',
     'idgrupocontrato': 'id_grupo_contrato',
     'convencao': 'convencao',
     'situacaoferiasafastamentohoje': 'situacao_ferias_afastamento_hoje',
-    'qtdfaltas': 'faltas_injustificadas_periodo'
+    'qtdfaltas': 'faltas_injustificadas_periodo',
+    'cliente': 'cliente', // NOVO
+    'contrato': 'contrato', // NOVO
 };
+
 
 const importFromXLSX = async (filePath, options = {}) => {
     const { data_inicio_distribuicao, data_fim_distribuicao } = options;
@@ -274,50 +278,16 @@ const exportAllToXLSX = async () => {
 
 const getFilterOptions = async () => {
     try {
-        const municipios = await Funcionario.findAll({
-            attributes: [[sequelize.fn('DISTINCT', sequelize.col('municipio_local_trabalho')), 'municipio_local_trabalho']],
-            where: { municipio_local_trabalho: { [Op.not]: null } },
-            order: [['municipio_local_trabalho', 'ASC']],
-            raw: true
-        });
-
-        const gestoes = await Funcionario.findAll({
-            attributes: [[sequelize.fn('DISTINCT', sequelize.col('des_grupo_contrato')), 'des_grupo_contrato']],
-            where: { des_grupo_contrato: { [Op.not]: null } },
-            order: [['des_grupo_contrato', 'ASC']],
-            raw: true
-        });
-
-        const categorias = await Funcionario.findAll({
-            attributes: [[sequelize.fn('DISTINCT', sequelize.col('categoria')), 'categoria']],
-            where: { categoria: { [Op.not]: null } },
-            order: [['categoria', 'ASC']],
-            raw: true
-        });
-        
-        const estados = await Funcionario.findAll({
-            attributes: [[sequelize.fn('DISTINCT', sequelize.col('sigla_local')), 'sigla_local']],
-            where: { sigla_local: { [Op.not]: null } },
-            order: [['sigla_local', 'ASC']],
-            raw: true
-        });
-
-        const escalas = await Funcionario.findAll({
-            attributes: [[sequelize.fn('DISTINCT', sequelize.col('escala')), 'escala']],
-            where: { escala: { [Op.not]: null } },
-            order: [['escala', 'ASC']],
-            raw: true
-        });
-
-        // ==========================================================
-        // NOVA CONSULTA ADICIONADA AQUI
-        // ==========================================================
-        const tiposContrato = await Funcionario.findAll({
-            attributes: [[sequelize.fn('DISTINCT', sequelize.col('categoria_trab')), 'categoria_trab']],
-            where: { categoria_trab: { [Op.not]: null } },
-            order: [['categoria_trab', 'ASC']],
-            raw: true
-        });
+        const [municipios, gestoes, categorias, estados, escalas, tiposContrato, clientes, contratos] = await Promise.all([
+            Funcionario.findAll({ attributes: [[sequelize.fn('DISTINCT', sequelize.col('municipio_local_trabalho')), 'municipio_local_trabalho']], where: { municipio_local_trabalho: { [Op.not]: null } }, order: [['municipio_local_trabalho', 'ASC']], raw: true }),
+            Funcionario.findAll({ attributes: [[sequelize.fn('DISTINCT', sequelize.col('des_grupo_contrato')), 'des_grupo_contrato']], where: { des_grupo_contrato: { [Op.not]: null } }, order: [['des_grupo_contrato', 'ASC']], raw: true }),
+            Funcionario.findAll({ attributes: [[sequelize.fn('DISTINCT', sequelize.col('categoria')), 'categoria']], where: { categoria: { [Op.not]: null } }, order: [['categoria', 'ASC']], raw: true }),
+            Funcionario.findAll({ attributes: [[sequelize.fn('DISTINCT', sequelize.col('sigla_local')), 'sigla_local']], where: { sigla_local: { [Op.not]: null } }, order: [['sigla_local', 'ASC']], raw: true }),
+            Funcionario.findAll({ attributes: [[sequelize.fn('DISTINCT', sequelize.col('escala')), 'escala']], where: { escala: { [Op.not]: null } }, order: [['escala', 'ASC']], raw: true }),
+            Funcionario.findAll({ attributes: [[sequelize.fn('DISTINCT', sequelize.col('categoria_trab')), 'categoria_trab']], where: { categoria_trab: { [Op.not]: null } }, order: [['categoria_trab', 'ASC']], raw: true }),
+            Funcionario.findAll({ attributes: [[sequelize.fn('DISTINCT', sequelize.col('cliente')), 'cliente']], where: { cliente: { [Op.not]: null } }, order: [['cliente', 'ASC']], raw: true }),
+            Funcionario.findAll({ attributes: [[sequelize.fn('DISTINCT', sequelize.col('contrato')), 'contrato']], where: { contrato: { [Op.not]: null } }, order: [['contrato', 'ASC']], raw: true }),
+        ]);
 
         return {
             municipios: municipios.map(item => item.municipio_local_trabalho),
@@ -325,7 +295,9 @@ const getFilterOptions = async () => {
             categorias: categorias.map(item => item.categoria),
             estados: estados.map(item => item.sigla_local),
             escalas: escalas.map(item => item.escala),
-            tiposContrato: tiposContrato.map(item => item.categoria_trab), // NOVO DADO RETORNADO
+            tiposContrato: tiposContrato.map(item => item.categoria_trab),
+            clientes: clientes.map(item => item.cliente),
+            contratos: contratos.map(item => item.contrato),
         };
     } catch (error) {
         console.error("Erro ao buscar opções de filtro:", error);
