@@ -1,4 +1,4 @@
-// src/models/funcionario.model.js
+// Em: src/models/funcionario.model.js
 
 const { DataTypes } = require('sequelize');
 const sequelize = require('../config/sequelize-instance');
@@ -11,8 +11,20 @@ const Funcionario = sequelize.define('Funcionario', {
   periodo_aquisitivo_atual_inicio: { type: DataTypes.DATEONLY },
   periodo_aquisitivo_atual_fim: { type: DataTypes.DATEONLY },
   dth_limite_ferias: { type: DataTypes.DATE },
-  faltas_injustificadas_periodo: { type: DataTypes.INTEGER, defaultValue: 0 },
-  saldo_dias_ferias: { type: DataTypes.INTEGER, defaultValue: 30 },
+  
+  // CAMPOS NOVOS E AJUSTADOS DA PLANILHA
+  dias_direito: { type: DataTypes.INTEGER, defaultValue: 30 }, // NOVO
+  dias_planejados: { type: DataTypes.INTEGER, defaultValue: 0 }, // NOVO
+  dias_saldo: { type: DataTypes.INTEGER, defaultValue: 0 }, // NOVO
+  dias_programados: { type: DataTypes.INTEGER, defaultValue: 0 }, // NOVO
+  dias_vendidos: { type: DataTypes.INTEGER, defaultValue: 0 }, // NOVO
+  dias_gozados: { type: DataTypes.INTEGER, defaultValue: 0 }, // NOVO
+  dias_abono: { type: DataTypes.INTEGER, defaultValue: 0 }, // NOVO
+  dias_faltas: { type: DataTypes.INTEGER, defaultValue: 0 }, // NOVO (qtdFaltas da planilha)
+  
+  faltas_injustificadas_periodo: { type: DataTypes.INTEGER, defaultValue: 0 }, // Mantido (pode ser o mesmo que dias_faltas)
+  saldo_dias_ferias: { type: DataTypes.INTEGER, defaultValue: 30 }, // Mantido (será calculado com base nas faltas)
+  
   convencao: { type: DataTypes.STRING },
   categoria: { type: DataTypes.STRING },
   categoria_trab: { type: DataTypes.STRING },
@@ -39,6 +51,4 @@ const Funcionario = sequelize.define('Funcionario', {
   tableName: 'funcionarios',
 });
 
-// REMOVA QUALQUER `Funcionario.hasMany` OU ASSOCIAÇÃO DESTE ARQUIVO
-
-module.exports = Funcionario; 
+module.exports = Funcionario;

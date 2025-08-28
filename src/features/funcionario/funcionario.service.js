@@ -15,6 +15,7 @@ const normalizeHeader = (header) => {
         .replace(/\s+/g, '');
 };
 
+// SUBSTITUIR O OBJETO ANTIGO POR ESTE
 const columnMapping = {
     'matricula': 'matricula',
     'nomefuncionario': 'nome_funcionario',
@@ -26,14 +27,15 @@ const columnMapping = {
     'datalimitefiltro': 'data_limite_filtro',
     'ultimadataplanejada': 'ultima_data_planejada',
     'ultimadataplanejadames': 'ultima_data_planejada_mes',
-    'anoultimadataplanejada': 'ano_ultima_data_planejada',
-    'qtdperiodosplanejados': 'qtd_periodos_planejados',
-    'qtdperiodosgozo': 'qtd_periodos_gozo',
-    'qtdperiodospendentes': 'qtd_periodos_pendentes',
-    'qtdperiodoscompletos': 'qtd_periodos_completos',
-    'qtdperiodosincompletos': 'qtd_periodos_incompletos',
-    'qtdperiodosindividuais': 'qtd_periodos_individuais',
-    'qtdperiodoscoletivos': 'qtd_periodos_coletivos',
+    // A coluna "Ano" da planilha não parece ter um campo correspondente no modelo, pode ser ignorada ou adicionada se necessário.
+    'diasdireito': 'dias_direito',
+    'diasplanejados': 'dias_planejados',
+    'diassaldo': 'dias_saldo',
+    'diasprogramados': 'dias_programados',
+    'diasvendidos': 'dias_vendidos',
+    'diasgozados': 'dias_gozados',
+    'diasabono': 'dias_abono',
+    'diasfaltas': 'dias_faltas', // Mapeando para o novo campo
     'categoria': 'categoria',
     'categoriatrab': 'categoria_trab',
     'horario': 'horario',
@@ -43,8 +45,9 @@ const columnMapping = {
     'idgrupocontrato': 'id_grupo_contrato',
     'convencao': 'convencao',
     'situacaoferiasafastamentohoje': 'situacao_ferias_afastamento_hoje',
-    'qtdfaltas': 'faltas_injustificadas_periodo'
+    'qtdfaltas': 'faltas_injustificadas_periodo' // Mapeando para o campo existente
 };
+
 
 const importFromXLSX = async (filePath, options = {}) => {
     const { data_inicio_distribuicao, data_fim_distribuicao } = options;
