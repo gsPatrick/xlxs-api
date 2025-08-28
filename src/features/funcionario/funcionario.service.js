@@ -15,7 +15,6 @@ const normalizeHeader = (header) => {
         .replace(/\s+/g, '');
 };
 
-// SUBSTITUIR O OBJETO ANTIGO POR ESTE
 const columnMapping = {
     'matricula': 'matricula',
     'nomefuncionario': 'nome_funcionario',
@@ -27,15 +26,14 @@ const columnMapping = {
     'datalimitefiltro': 'data_limite_filtro',
     'ultimadataplanejada': 'ultima_data_planejada',
     'ultimadataplanejadames': 'ultima_data_planejada_mes',
-    // A coluna "Ano" da planilha não parece ter um campo correspondente no modelo, pode ser ignorada ou adicionada se necessário.
-    'diasdireito': 'dias_direito',
-    'diasplanejados': 'dias_planejados',
-    'diassaldo': 'dias_saldo',
-    'diasprogramados': 'dias_programados',
-    'diasvendidos': 'dias_vendidos',
-    'diasgozados': 'dias_gozados',
-    'diasabono': 'dias_abono',
-    'diasfaltas': 'dias_faltas', // Mapeando para o novo campo
+    'anoultimadataplanejada': 'ano_ultima_data_planejada',
+    'qtdperiodosplanejados': 'qtd_periodos_planejados',
+    'qtdperiodosgozo': 'qtd_periodos_gozo',
+    'qtdperiodospendentes': 'qtd_periodos_pendentes',
+    'qtdperiodoscompletos': 'qtd_periodos_completos',
+    'qtdperiodosincompletos': 'qtd_periodos_incompletos',
+    'qtdperiodosindividuais': 'qtd_periodos_individuais',
+    'qtdperiodoscoletivos': 'qtd_periodos_coletivos',
     'categoria': 'categoria',
     'categoriatrab': 'categoria_trab',
     'horario': 'horario',
@@ -45,9 +43,8 @@ const columnMapping = {
     'idgrupocontrato': 'id_grupo_contrato',
     'convencao': 'convencao',
     'situacaoferiasafastamentohoje': 'situacao_ferias_afastamento_hoje',
-    'qtdfaltas': 'faltas_injustificadas_periodo' // Mapeando para o campo existente
+    'qtdfaltas': 'faltas_injustificadas_periodo'
 };
-
 
 const importFromXLSX = async (filePath, options = {}) => {
     const { data_inicio_distribuicao, data_fim_distribuicao } = options;
@@ -312,12 +309,23 @@ const getFilterOptions = async () => {
             raw: true
         });
 
+        // ==========================================================
+        // NOVA CONSULTA ADICIONADA AQUI
+        // ==========================================================
+        const tiposContrato = await Funcionario.findAll({
+            attributes: [[sequelize.fn('DISTINCT', sequelize.col('categoria_trab')), 'categoria_trab']],
+            where: { categoria_trab: { [Op.not]: null } },
+            order: [['categoria_trab', 'ASC']],
+            raw: true
+        });
+
         return {
             municipios: municipios.map(item => item.municipio_local_trabalho),
             gestoes: gestoes.map(item => item.des_grupo_contrato),
             categorias: categorias.map(item => item.categoria),
             estados: estados.map(item => item.sigla_local),
             escalas: escalas.map(item => item.escala),
+            tiposContrato: tiposContrato.map(item => item.categoria_trab), // NOVO DADO RETORNADO
         };
     } catch (error) {
         console.error("Erro ao buscar opções de filtro:", error);

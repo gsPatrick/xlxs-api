@@ -47,7 +47,7 @@ const startServer = async () => {
     
     // ATENÇÃO: Em produção, considere usar `sync({ force: false, alter: true })` ou migrações.
     // `sync()` sem opções pode ser perigoso.
-    await db.sequelize.sync({force: true}); 
+    await db.sequelize.sync({force: false}); 
     console.log('Todos os modelos foram sincronizados com sucesso.');
 
     // SEEDING DO USUÁRIO ADMIN
