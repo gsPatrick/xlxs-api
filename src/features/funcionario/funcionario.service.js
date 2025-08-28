@@ -6,6 +6,7 @@ const feriasService = require('../ferias/ferias.service');
 const fs = require('fs');
 const XLSX = require('xlsx');
 const { parse, addDays, getYear, isValid, parseISO } = require('date-fns');
+const alertasService = require('../alertas/alertas.service'); // NOVO: Importa o serviço de alertas
 
 const normalizeHeader = (header) => {
     if (!header) return '';
@@ -217,12 +218,29 @@ const findAll = async (queryParams) => {
     if (queryParams.grupoContrato) { whereClause.des_grupo_contrato = queryParams.grupoContrato; }
     if (queryParams.categoria) { whereClause.categoria = queryParams.categoria; }
     if (queryParams.tipoContrato) { whereClause.categoria_trab = queryParams.tipoContrato; }
+    
+    // ==========================================================
+    // ALTERADO: Adicionado novo caso para o filtro 'reprogramar'
+    // ==========================================================
     if (queryParams.filtro) {
         const hoje = new Date();
         if (queryParams.filtro === 'vencidas') { whereClause.dth_limite_ferias = { [Op.lt]: hoje }; }
         if (queryParams.filtro === 'risco_iminente') {
             const dataLimiteRisco = addDays(hoje, 30);
             whereClause.dth_limite_ferias = { [Op.between]: [hoje, dataLimiteRisco] };
+        }
+        // NOVO FILTRO
+        if (queryParams.filtro === 'reprogramar') {
+            // Reutiliza a lógica do serviço de alertas para encontrar os funcionários
+            const funcionariosParaReprogramar = await alertasService.findNecessitaReprogramacao(queryParams);
+            const matriculasReprogramar = funcionariosParaReprogramar.map(f => f.matricula);
+
+            // Se não houver ninguém para reprogramar, garante que a busca retorne vazio
+            if (matriculasReprogramar.length === 0) {
+                 whereClause.matricula = { [Op.in]: [] };
+            } else {
+                 whereClause.matricula = { [Op.in]: matriculasReprogramar };
+            }
         }
     }
     
