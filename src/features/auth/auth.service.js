@@ -22,6 +22,7 @@ const login = async (email, password) => {
     // 3. Gerar o token JWT
     const payload = {
         id: user.id,
+        nome: user.nome,
         email: user.email,
         role: user.role
     };
