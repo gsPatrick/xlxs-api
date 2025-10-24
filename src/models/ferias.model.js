@@ -32,20 +32,29 @@ const Ferias = sequelize.define('Ferias', {
   status: {
     type: DataTypes.STRING,
     allowNull: false,
-    defaultValue: 'Planejada',
+    defaultValue: 'Planejada', // Ex: Planejada, Confirmada, Em Gozo, Cancelada
   },
   observacao: {
     type: DataTypes.TEXT,
     allowNull: true,
   },
   // ==========================================================
-  // NOVO CAMPO ADICIONADO (PONTO #6 DO FEEDBACK)
+  // ALTERAÇÃO 1: O valor padrão foi alterado de 'false' para 'true'
   // ==========================================================
   necessidade_substituicao: {
     type: DataTypes.BOOLEAN,
     allowNull: false,
-    defaultValue: false,
+    defaultValue: true, // ALTERADO
     comment: 'Indica se o funcionário precisa de um substituto durante as férias.'
+  },
+  // ==========================================================
+  // ALTERAÇÃO 2: Novo campo adicionado
+  // ==========================================================
+  ajuste_manual: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+    comment: 'Indica se este registro foi criado ou alterado manualmente pelo usuário.'
   }
 }, {
   tableName: 'ferias',

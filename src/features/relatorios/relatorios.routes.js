@@ -4,7 +4,14 @@ const relatoriosController = require('./relatorios.controller');
 
 const router = express.Router();
 
-// MUDANÇA: A rota de exportação de funcionários agora é um POST
+// ==========================================================
+// NOVA ROTA
+// ==========================================================
+// GET /api/relatorios/planejamento -> Exporta os dados filtrados da tela de planejamento
+router.get('/planejamento', relatoriosController.gerarRelatorioPlanejamento);
+
+
+// Rota de exportação de funcionários agora é um POST para aceitar corpo com matrículas
 router.post('/funcionarios', relatoriosController.gerarRelatorioFuncionarios);
 
 // As outras rotas permanecem

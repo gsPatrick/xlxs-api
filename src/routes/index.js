@@ -1,7 +1,7 @@
 // src/routes/index.js
 
 const express = require('express');
-const { protect } = require('../features/middleware/auth.middleware'); // Corrigindo o caminho do middleware
+const { protect } = require('../features/middleware/auth.middleware');
 
 // Importar todos os roteadores
 const authRoutes = require('../features/auth/auth.routes');
@@ -12,7 +12,12 @@ const dashboardRoutes = require('../features/dashboard/dashboard.routes');
 const relatoriosRoutes = require('../features/relatorios/relatorios.routes');
 const planejamentoRoutes = require('../features/planejamento/planejamento.routes');
 const userRoutes = require('../features/user/user.routes');
-const alertasRoutes = require('../features/alertas/alertas.routes'); // NOVO: Importar rotas de alertas
+const alertasRoutes = require('../features/alertas/alertas.routes');
+// ==========================================================
+// NOVA IMPORTAÇÃO
+// ==========================================================
+const jobsRoutes = require('../features/jobs/jobs.routes');
+
 
 const router = express.Router();
 
@@ -30,6 +35,10 @@ router.use('/dashboard', dashboardRoutes);
 router.use('/relatorios', relatoriosRoutes);
 router.use('/planejamentos', planejamentoRoutes);
 router.use('/users', userRoutes);
-router.use('/alertas', alertasRoutes); // NOVO: Adicionar rotas de alertas
+router.use('/alertas', alertasRoutes);
+// ==========================================================
+// NOVO REGISTRO DE ROTA
+// ==========================================================
+router.use('/jobs', jobsRoutes);
 
 module.exports = router;

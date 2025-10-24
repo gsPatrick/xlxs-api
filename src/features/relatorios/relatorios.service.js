@@ -1,6 +1,6 @@
 // src/features/relatorios/relatorios.service.js
 const { Op } = require('sequelize');
-const { Funcionario, Ferias } = require('../../models');
+const { Funcionario, Ferias, Planejamento } = require('../../models');
 const { addDays } = require('date-fns');
 const XLSX = require('xlsx');
 
@@ -29,18 +29,13 @@ const gerarXLSXRiscoVencimento = async (queryParams) => {
 
 /**
  * Gera um arquivo XLSX de funcionários com base em filtros dinâmicos e/ou uma lista de matrículas.
- * @param {object} queryParams - Filtros da query string (busca, status, municipio, filtro especial).
- * @param {Array<string>} [matriculas=[]] - Lista opcional de matrículas para exportar.
- * @returns {Promise<{buffer: Buffer, fileName: string}>} O buffer do arquivo XLSX e o nome do arquivo.
  */
 const gerarXLSXFuncionarios = async (queryParams, matriculas = []) => {
     const whereClause = {};
 
-    // Prioridade 1: Se uma lista de matrículas foi fornecida, usa apenas ela.
     if (matriculas && matriculas.length > 0) {
         whereClause.matricula = { [Op.in]: matriculas };
     } else {
-        // Prioridade 2: Aplica os filtros da query string (idênticos à listagem).
         if (queryParams.busca) {
             whereClause[Op.or] = [
                 { nome_funcionario: { [Op.iLike]: `%${queryParams.busca}%` } },
@@ -51,9 +46,7 @@ const gerarXLSXFuncionarios = async (queryParams, matriculas = []) => {
         if (queryParams.municipio) { whereClause.municipio_local_trabalho = queryParams.municipio; }
         if (queryParams.filtro) {
             const hoje = new Date();
-            if (queryParams.filtro === 'vencidas') {
-                whereClause.dth_limite_ferias = { [Op.lt]: hoje };
-            }
+            if (queryParams.filtro === 'vencidas') whereClause.dth_limite_ferias = { [Op.lt]: hoje };
             if (queryParams.filtro === 'risco_iminente') {
                 const dataLimiteRisco = addDays(hoje, 30);
                 whereClause.dth_limite_ferias = { [Op.between]: [hoje, dataLimiteRisco] };
@@ -61,15 +54,8 @@ const gerarXLSXFuncionarios = async (queryParams, matriculas = []) => {
         }
     }
 
-    const funcionarios = await Funcionario.findAll({
-        where: whereClause,
-        order: [['nome_funcionario', 'ASC']],
-        raw: true
-    });
-
-    if (funcionarios.length === 0) {
-        throw new Error("Nenhum funcionário encontrado para os critérios de exportação selecionados.");
-    }
+    const funcionarios = await Funcionario.findAll({ where: whereClause, order: [['nome_funcionario', 'ASC']], raw: true });
+    if (funcionarios.length === 0) throw new Error("Nenhum funcionário encontrado para os critérios selecionados.");
 
     const ws = XLSX.utils.json_to_sheet(funcionarios);
     const wb = XLSX.utils.book_new();
@@ -78,6 +64,74 @@ const gerarXLSXFuncionarios = async (queryParams, matriculas = []) => {
     
     return { buffer, fileName: `Relatorio_Funcionarios.xlsx` };
 };
+
+// ==========================================================
+// NOVA FUNÇÃO
+// ==========================================================
+/**
+ * Gera um arquivo XLSX do planejamento de férias ativo com base em filtros.
+ * @param {object} queryParams - Filtros da query string (ano, busca, status, etc.).
+ * @returns {Promise<{buffer: Buffer, fileName: string}>} O buffer do arquivo XLSX e o nome do arquivo.
+ */
+const gerarXLSXPlanejamento = async (queryParams) => {
+    const ano = parseInt(queryParams.ano, 10) || new Date().getFullYear();
+
+    const planejamentoAtivo = await Planejamento.findOne({ where: { ano, status: 'ativo' } });
+    if (!planejamentoAtivo) {
+        throw new Error(`Nenhum planejamento ativo encontrado para o ano de ${ano}.`);
+    }
+
+    const whereFuncionario = {};
+    const whereFerias = { planejamentoId: planejamentoAtivo.id };
+
+    if (queryParams.q) { whereFuncionario[Op.or] = [{ nome_funcionario: { [Op.iLike]: `%${queryParams.q}%` } }, { matricula: { [Op.iLike]: `%${queryParams.q}%` } }]; }
+    if (queryParams.categoria) { whereFuncionario.categoria = { [Op.iLike]: `%${queryParams.categoria}%` }; }
+    if (queryParams.des_grupo_contrato) { whereFuncionario.des_grupo_contrato = { [Op.iLike]: `%${queryParams.des_grupo_contrato}%` }; }
+    if (queryParams.municipio_local_trabalho) { whereFuncionario.municipio_local_trabalho = { [Op.iLike]: `%${queryParams.municipio_local_trabalho}%` }; }
+    if (queryParams.escala) { whereFuncionario.escala = { [Op.iLike]: `%${queryParams.escala}%` }; }
+    if (queryParams.sigla_local) { whereFuncionario.sigla_local = { [Op.iLike]: `%${queryParams.sigla_local}%` }; }
+    if (queryParams.cliente) { whereFuncionario.cliente = { [Op.iLike]: `%${queryParams.cliente}%` }; }
+    if (queryParams.contrato) { whereFuncionario.contrato = { [Op.iLike]: `%${queryParams.contrato}%` }; }
+
+    const feriasPlanejadas = await Ferias.findAll({
+        where: whereFerias,
+        include: [{
+            model: Funcionario,
+            where: whereFuncionario,
+            required: true
+        }],
+        order: [['data_inicio', 'ASC']],
+    });
+
+    if (feriasPlanejadas.length === 0) {
+        throw new Error("Nenhum registro de férias encontrado para os filtros selecionados.");
+    }
+
+    // Formata os dados para um layout de planilha mais amigável
+    const dadosFormatados = feriasPlanejadas.map(f => ({
+        "Matrícula": f.Funcionario.matricula,
+        "Nome do Funcionário": f.Funcionario.nome_funcionario,
+        "Status das Férias": f.status,
+        "Início das Férias": f.data_inicio,
+        "Fim das Férias": f.data_fim,
+        "Dias": f.qtd_dias,
+        "Necessita Substituição?": f.necessidade_substituicao ? 'Sim' : 'Não',
+        "Categoria/Cargo": f.Funcionario.categoria,
+        "Gestão do Contrato": f.Funcionario.des_grupo_contrato,
+        "Município": f.Funcionario.municipio_local_trabalho,
+        "Estado (UF)": f.Funcionario.sigla_local,
+        "Status do Funcionário": f.Funcionario.status,
+        "Observação": f.observacao,
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(dadosFormatados);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, `Planejamento ${ano}`);
+    const buffer = XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' });
+
+    return { buffer, fileName: `Relatorio_Planejamento_Ferias_${ano}.xlsx` };
+};
+
 
 // Lógica para gerar o relatório de projeção de custos (mockado por enquanto)
 const gerarXLSXProjecaoCustos = async (queryParams) => {
@@ -125,5 +179,6 @@ module.exports = {
     gerarXLSXRiscoVencimento,
     gerarXLSXProjecaoCustos,
     gerarAvisoFeriasXLSX,
-    gerarXLSXFuncionarios
+    gerarXLSXFuncionarios,
+    gerarXLSXPlanejamento // Exporta a nova função
 };

@@ -13,10 +13,8 @@ const gerarRelatorioRiscoVencimento = async (req, res) => {
     }
 };
 
-// NOVO: Controlador para a exportação flexível de funcionários
 const gerarRelatorioFuncionarios = async (req, res) => {
     try {
-        // Passa tanto os filtros da query string quanto as matrículas do corpo
         const { buffer, fileName } = await relatoriosService.gerarXLSXFuncionarios(req.query, req.body.matriculas);
         res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -25,6 +23,22 @@ const gerarRelatorioFuncionarios = async (req, res) => {
         res.status(500).send({ message: 'Falha ao gerar relatório de funcionários.', error: error.message });
     }
 };
+
+// ==========================================================
+// NOVO CONTROLADOR
+// ==========================================================
+const gerarRelatorioPlanejamento = async (req, res) => {
+    try {
+        const { buffer, fileName } = await relatoriosService.gerarXLSXPlanejamento(req.query);
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.send(buffer);
+    } catch (error) {
+        console.error("Erro no controller ao gerar relatório de planejamento:", error);
+        res.status(500).send({ message: 'Falha ao gerar relatório de planejamento.', error: error.message });
+    }
+};
+
 
 const gerarRelatorioProjecaoCustos = async (req, res) => {
     try {
@@ -55,5 +69,6 @@ module.exports = {
     gerarRelatorioRiscoVencimento,
     gerarRelatorioProjecaoCustos,
     gerarAvisoFerias,
-    gerarRelatorioFuncionarios
+    gerarRelatorioFuncionarios,
+    gerarRelatorioPlanejamento // Exporta o novo controlador
 };

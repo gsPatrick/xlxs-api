@@ -5,6 +5,12 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
+// ==========================================================
+// NOVA IMPORTAÇÃO
+// ==========================================================
+const cron = require('node-cron');
+const jobsService = require('./features/jobs/jobs.service');
+
 
 const allRoutes = require('./routes');
 const db = require('./models');
@@ -12,23 +18,16 @@ const db = require('./models');
 const app = express();
 const PORT = process.env.APP_PORT || 3000;
 
-// ======================================================================
-// CORREÇÃO CENTRAL: Configuração explícita do CORS
-// ======================================================================
 const corsOptions = {
-  origin: '*', // Permite requisições de qualquer origem. Para produção, troque por 'http://seu-dominio-frontend.com'
-  methods: "GET,HEAD,PUT,PATCH,POST,DELETE", // Métodos permitidos
+  origin: '*',
+  methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
   preflightContinue: false,
-  optionsSuccessStatus: 204 // Alguns navegadores legados (IE11) engasgam com 204
+  optionsSuccessStatus: 204
 };
 
-// Usa as opções de CORS. Isso fará com que o Express responda
-// automaticamente às requisições OPTIONS com status 204 (No Content) e os headers corretos.
 app.use(cors(corsOptions));
-// Também é uma boa prática habilitar o pre-flight para todas as rotas
 app.options('*', cors(corsOptions)); 
 
-// O restante do seu setup de middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -37,7 +36,6 @@ if (!fs.existsSync(uploadDir)){
     fs.mkdirSync(uploadDir);
 }
 
-// Suas rotas
 app.use('/api', allRoutes);
 
 const startServer = async () => {
@@ -45,30 +43,40 @@ const startServer = async () => {
     await db.sequelize.authenticate();
     console.log('Conexão com o banco de dados PostgreSQL estabelecida com sucesso.');
     
-    // ATENÇÃO: Em produção, considere usar `sync({ force: false, alter: true })` ou migrações.
-    // `sync()` sem opções pode ser perigoso.
     await db.sequelize.sync({force: false}); 
     console.log('Todos os modelos foram sincronizados com sucesso.');
 
-    // SEEDING DO USUÁRIO ADMIN
     const adminEmail = process.env.ADMIN_EMAIL || 'admin@empresa.com';
     const adminPassword = process.env.ADMIN_PASSWORD || 'admin123';
-
     const adminExists = await db.User.findOne({ where: { email: adminEmail } });
     
     if (!adminExists) {
-        // Agora o modelo User requer um nome
         await db.User.create({
-            nome: 'Administrador Padrão', // Adicionado nome padrão
+            nome: 'Administrador Padrão',
             email: adminEmail,
             password: adminPassword,
             role: 'admin'
         });
-        console.log(`>>> Usuário admin padrão criado:`);
-        console.log(`>>> Nome: Administrador Padrão`);
-        console.log(`>>> E-mail: ${adminEmail}`);
-        console.log(`>>> Senha: ${adminPassword}`);
+        console.log(`>>> Usuário admin padrão criado.`);
     }
+
+    // ==========================================================
+    // NOVA SEÇÃO: AGENDAMENTO DA TAREFA (CRON JOB)
+    // ==========================================================
+    // Agenda a tarefa para rodar todos os dias à 1 da manhã.
+    // O formato é: 'minuto hora dia-do-mês mês dia-da-semana'
+    cron.schedule('0 1 * * *', () => {
+      console.log('================================================');
+      console.log('[CRON] Executando tarefa agendada: verificarConflitosDeAfastamento');
+      jobsService.verificarConflitosDeAfastamento();
+      console.log('================================================');
+    }, {
+      scheduled: true,
+      timezone: "America/Sao_Paulo" // Defina o fuso horário apropriado
+    });
+    console.log('🕒 Job de verificação de conflitos agendado para rodar diariamente à 01:00.');
+    // ==========================================================
+
 
     app.listen(PORT, () => {
       console.log(`🚀 Servidor rodando na porta ${PORT}`);
