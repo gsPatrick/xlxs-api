@@ -1,6 +1,6 @@
 // src/features/dashboard/dashboard.service.js
 const { Funcionario, Planejamento, Ferias } = require('../../models');
-const { Op, fn, col, literal } = require('sequelize');
+const { Op } = require('sequelize');
 const { addDays, startOfYear, endOfYear } = require('date-fns');
 
 const getSummaryData = async () => {
@@ -60,9 +60,6 @@ const getSummaryData = async () => {
         where: { status: 'Solicitada' }
     });
 
-    // ==========================================================
-    // NOVA CONTAGEM (PONTO #6 DO FEEDBACK)
-    // ==========================================================
     const necessidadeSubstituicao = await Ferias.count({
         where: {
             necessidade_substituicao: true,
@@ -70,6 +67,24 @@ const getSummaryData = async () => {
             data_inicio: { [Op.gte]: hoje }
         }
     });
+
+    // ==========================================================
+    // NOVA CONTAGEM: Férias pendentes de substituto
+    // ==========================================================
+    let pendentesDeSubstituto = 0;
+    if (planejamentoAtivo) {
+        pendentesDeSubstituto = await Ferias.count({
+            where: {
+                planejamentoId: planejamentoAtivo.id,
+                status: { [Op.in]: ['Planejada', 'Confirmada'] },
+                data_inicio: { [Op.gte]: hoje },
+                necessidade_substituicao: true,
+                observacao: {
+                    [Op.iLike]: '%Pendente de alocação de substituto%'
+                }
+            }
+        });
+    }
 
 
     // =================================================================
@@ -86,11 +101,11 @@ const getSummaryData = async () => {
                 }
             },
             attributes: [
-                [fn('to_char', col('data_inicio'), 'MM'), 'mes'],
-                [fn('count', col('id')), 'total']
+                [Op.fn('to_char', Op.col('data_inicio'), 'MM'), 'mes'],
+                [Op.fn('count', Op.col('id')), 'total']
             ],
             group: ['mes'],
-            order: [[literal('mes'), 'ASC']],
+            order: [[Op.literal('mes'), 'ASC']],
             raw: true
         });
         
@@ -105,6 +120,26 @@ const getSummaryData = async () => {
         });
     }
 
+    const itensDeAcao = [
+        { title: 'Férias Vencidas', count: feriasVencidas, link: '/funcionarios?filtro=vencidas', variant: 'danger' },
+        { title: 'Risco Iminente (30 dias)', count: riscoIminente, link: '/funcionarios?filtro=risco_iminente', variant: 'warning' },
+        { title: 'A Vencer (31-90 dias)', count: riscoMedioPrazo, link: '/funcionarios?filtro=risco_medio', variant: 'info' },
+        { title: 'Necessitam Substituição', count: necessidadeSubstituicao, link: '/planejamento?filtro=substituicao', variant: 'info' },
+        { title: 'Solicitações Pendentes', count: solicitacoesPendentes, link: '/planejamento?filtro=pendentes', variant: 'neutral' },
+    ];
+    
+    // ==========================================================
+    // NOVO ITEM DE AÇÃO: Adiciona o card se houver pendências
+    // ==========================================================
+    if (pendentesDeSubstituto > 0) {
+        itensDeAcao.push({ 
+            title: 'Pendente de Substituto', 
+            count: pendentesDeSubstituto, 
+            link: '/planejamento?filtro=pendente_substituto', // Link para um futuro filtro na tela de planejamento
+            variant: 'warning' 
+        });
+    }
+
 
     return {
         cardsPrincipais: {
@@ -113,13 +148,7 @@ const getSummaryData = async () => {
             funcionariosComFeriasPlanejadas,
             percentualPlanejado: `${percentualPlanejado}%`
         },
-        itensDeAcao: [
-            { title: 'Férias Vencidas', count: feriasVencidas, link: '/funcionarios?filtro=vencidas', variant: 'danger' },
-            { title: 'Risco Iminente (30 dias)', count: riscoIminente, link: '/funcionarios?filtro=risco_iminente', variant: 'warning' },
-            { title: 'A Vencer (31-90 dias)', count: riscoMedioPrazo, link: '/funcionarios?filtro=risco_medio', variant: 'info' },
-            { title: 'Necessitam Substituição', count: necessidadeSubstituicao, link: '/planejamento?filtro=substituicao', variant: 'info' }, // NOVO ITEM
-            { title: 'Solicitações Pendentes', count: solicitacoesPendentes, link: '/planejamento?filtro=pendentes', variant: 'neutral' },
-        ],
+        itensDeAcao, // Retorna a lista atualizada
         distribuicaoMensal
     };
 };

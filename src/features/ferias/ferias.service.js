@@ -2,7 +2,7 @@
 
 const { Op } = require('sequelize');
 const axios = require('axios');
-const { Ferias, Funcionario, Planejamento, Afastamento, Substituto } = require('../../models'); // NOVO: Importa o modelo Substituto
+const { Ferias, Funcionario, Planejamento, Afastamento, Substituto, sequelize } = require('../../models');
 const { addYears, addMonths, addDays, differenceInDays, isWithinInterval, getDay, format, getYear, parseISO, startOfDay, isValid } = require('date-fns');
 
 /**
@@ -20,71 +20,6 @@ async function getFeriadosNacionais(ano) {
         return [`${ano}-01-01`, `${ano}-04-21`, `${ano}-05-01`, `${ano}-09-07`, `${ano}-10-12`, `${ano}-11-02`, `${ano}-11-15`, `${ano}-12-25`];
     }
 }
-
-// ======================================================================
-// NOVA FUNÇÃO INTERNA: LÓGICA PARA ENCONTRAR SUBSTITUTOS
-// ======================================================================
-/**
- * Busca um substituto disponível para um determinado funcionário e período.
- * @param {object} funcionario - O funcionário que sairá de férias.
- * @param {Date} dataInicioFerias - Data de início das férias.
- * @param {Date} dataFimFerias - Data de fim das férias.
- * @param {object} transaction - A transação do Sequelize.
- * @returns {Promise<object|null>} O objeto do substituto encontrado ou null.
- */
-async function findAvailableSubstitute(funcionario, dataInicioFerias, dataFimFerias, transaction) {
-    // 1. Encontra todos os substitutos aptos para o cargo do funcionário
-    const potenciaisSubstitutos = await Substituto.findAll({
-        where: {
-            status: 'Disponível',
-            matricula_funcionario: { [Op.ne]: funcionario.matricula }, // Não pode ser o próprio funcionário
-            cargos_aptos: { [Op.contains]: [funcionario.categoria] } // Verifica se o cargo é compatível
-        },
-        include: [
-            { model: Funcionario, include: ['historicoFerias', 'historicoAfastamentos'] }
-        ],
-        transaction
-    });
-
-    if (!potenciaisSubstitutos.length) {
-        return null;
-    }
-
-    // 2. Itera para encontrar o primeiro que não tenha conflito de agenda
-    for (const substituto of potenciaisSubstitutos) {
-        let temConflito = false;
-        const funcSubstituto = substituto.Funcionario;
-
-        // Verifica conflito com outras férias do substituto
-        for (const ferias of funcSubstituto.historicoFerias) {
-            const feriasInicio = new Date(ferias.data_inicio);
-            const feriasFim = new Date(ferias.data_fim);
-            if (dataInicioFerias <= feriasFim && dataFimFerias >= feriasInicio) {
-                temConflito = true;
-                break;
-            }
-        }
-        if (temConflito) continue;
-
-        // Verifica conflito com afastamentos do substituto
-        for (const afastamento of funcSubstituto.historicoAfastamentos) {
-            const afastamentoInicio = new Date(afastamento.data_inicio);
-            const afastamentoFim = afastamento.data_fim ? new Date(afastamento.data_fim) : new Date('9999-12-31');
-            if (dataInicioFerias <= afastamentoFim && dataFimFerias >= afastamentoInicio) {
-                temConflito = true;
-                break;
-            }
-        }
-        if (temConflito) continue;
-
-        // Se chegou aqui, não há conflitos. Este substituto está disponível.
-        return substituto;
-    }
-
-    // Se o loop terminou, ninguém estava disponível
-    return null;
-}
-
 
 /**
  * RECALCULA O PERÍODO AQUISITIVO E O SALDO DE FÉRIAS DE UM FUNCIONÁRIO.
@@ -187,6 +122,80 @@ function isDataValidaInicio(data, funcionario, feriados) {
 };
 
 /**
+ * Busca e aloca um substituto disponível para um período.
+ */
+async function findAndAllocateSubstitute(funcionario, dataInicioFerias, dataFimFerias, transaction) {
+    const t = transaction || await sequelize.transaction();
+    try {
+        const potenciaisSubstitutos = await Substituto.findAll({
+            where: {
+                status: 'Disponível',
+                matricula_funcionario: { [Op.ne]: funcionario.matricula },
+                cargos_aptos: { [Op.contains]: [funcionario.categoria] }
+            },
+            include: [{ 
+                model: Funcionario, 
+                include: ['historicoFerias', 'historicoAfastamentos'] 
+            }],
+            transaction: t
+        });
+
+        if (!potenciaisSubstitutos.length) {
+            if (!transaction) await t.commit();
+            return null;
+        }
+
+        for (const substituto of potenciaisSubstitutos) {
+            let temConflito = false;
+            
+            // Verifica se o substituto já não está alocado em outras férias no mesmo período
+            const alocacoes = await Ferias.findAll({ where: { substituto_id: substituto.id }, transaction: t });
+            for (const aloc of alocacoes) {
+                 if (dataInicioFerias <= new Date(aloc.data_fim) && dataFimFerias >= new Date(aloc.data_inicio)) {
+                    temConflito = true;
+                    break;
+                }
+            }
+            if(temConflito) continue;
+
+            // Se chegou aqui, o substituto está disponível
+            await substituto.update({ status: 'Alocado' }, { transaction: t });
+            if (!transaction) await t.commit();
+            return substituto;
+        }
+
+        if (!transaction) await t.commit();
+        return null;
+    } catch (error) {
+        if (!transaction) await t.rollback();
+        console.error('Erro ao alocar substituto:', error);
+        throw error;
+    }
+}
+
+/**
+ * Libera um substituto, mudando seu status para 'Disponível'.
+ */
+async function releaseSubstitute(feriasId, transaction) {
+    const t = transaction || await sequelize.transaction();
+    try {
+        const ferias = await Ferias.findByPk(feriasId, { transaction: t });
+        if (ferias && ferias.substituto_id) {
+            const substituto = await Substituto.findByPk(ferias.substituto_id, { transaction: t });
+            if (substituto) {
+                await substituto.update({ status: 'Disponível' }, { transaction: t });
+                console.log(`Substituto ID ${substituto.id} liberado.`);
+            }
+        }
+        if (!transaction) await t.commit();
+    } catch(error) {
+        if (!transaction) await t.rollback();
+        console.error('Erro ao liberar substituto:', error);
+        throw error;
+    }
+}
+
+/**
  * Orquestra a criação de um novo planejamento de férias para um ano.
  */
 async function distribuirFerias(ano, descricao, options = {}) {
@@ -265,13 +274,12 @@ async function distribuirFerias(ano, descricao, options = {}) {
                     if (calendarioOcupacao[chaveOcupacao] < 5) {
                         const dataFim = addDays(dataAtual, diasDeFerias - 1);
                         let observacao = null;
+                        let substituto_id = null;
                         
-                        // ==========================================================
-                        // NOVA LÓGICA: VERIFICAÇÃO DE SUBSTITUTO
-                        // ==========================================================
-                        // A necessidade de substituição é 'true' por padrão no modelo de férias
-                        const substitutoEncontrado = await findAvailableSubstitute(funcionario, dataAtual, dataFim, t);
-                        if (!substitutoEncontrado) {
+                        const substitutoAlocado = await findAndAllocateSubstitute(funcionario, dataAtual, dataFim, t);
+                        if (substitutoAlocado) {
+                            substituto_id = substitutoAlocado.id;
+                        } else {
                             observacao = 'Pendente de alocação de substituto.';
                         }
 
@@ -286,7 +294,8 @@ async function distribuirFerias(ano, descricao, options = {}) {
                             status: 'Planejada',
                             ajuste_manual: false,
                             necessidade_substituicao: true,
-                            observacao: observacao // Adiciona a observação
+                            substituto_id: substituto_id,
+                            observacao: observacao
                         });
                         calendarioOcupacao[chaveOcupacao]++;
                         dataInicioEncontrada = true;
@@ -322,7 +331,7 @@ async function distribuirFerias(ano, descricao, options = {}) {
 }
 
 /**
- * Redistribui as férias para um grupo selecionado de funcionários dentro de um novo período.
+ * Redistribui as férias para um grupo selecionado de funcionários.
  */
 const redistribuirFeriasSelecionadas = async (dados) => {
     const { matriculas, dataInicio, dataFim, descricao } = dados;
@@ -340,15 +349,11 @@ const redistribuirFeriasSelecionadas = async (dados) => {
         const planejamentoAtivo = await Planejamento.findOne({ where: { ano, status: 'ativo' }, ...options });
         if (!planejamentoAtivo) throw new Error(`Nenhum planejamento ativo para o ano ${ano}.`);
         
-        await Ferias.destroy({
-            where: {
-                matricula_funcionario: { [Op.in]: matriculas },
-                planejamentoId: planejamentoAtivo.id,
-                status: 'Planejada',
-                ajuste_manual: false
-            },
-            ...options
-        });
+        const feriasAntigas = await Ferias.findAll({ where: { matricula_funcionario: { [Op.in]: matriculas }, planejamentoId: planejamentoAtivo.id, ajuste_manual: false }, transaction: t });
+        for (const ferias of feriasAntigas) {
+            await releaseSubstitute(ferias.id, t);
+        }
+        await Ferias.destroy({ where: { id: { [Op.in]: feriasAntigas.map(f => f.id) } }, ...options });
         
         const funcionariosParaRedistribuir = await Funcionario.findAll({
             where: { matricula: { [Op.in]: matriculas }, status: 'Ativo' },
@@ -390,12 +395,12 @@ const redistribuirFeriasSelecionadas = async (dados) => {
                     if (calendarioOcupacao[chaveOcupacao] < 5) {
                         const dataFimCalculada = addDays(dataAtual, diasDeFerias - 1);
                         let observacao = descricao || 'Redistribuição em massa';
+                        let substituto_id = null;
                         
-                        // ==========================================================
-                        // NOVA LÓGICA: VERIFICAÇÃO DE SUBSTITUTO
-                        // ==========================================================
-                        const substitutoEncontrado = await findAvailableSubstitute(funcionario, dataAtual, dataFimCalculada, t);
-                        if (!substitutoEncontrado) {
+                        const substitutoAlocado = await findAndAllocateSubstitute(funcionario, dataAtual, dataFimCalculada, t);
+                        if (substitutoAlocado) {
+                            substituto_id = substitutoAlocado.id;
+                        } else {
                             observacao = observacao ? `${observacao} | Pendente de alocação de substituto.` : 'Pendente de alocação de substituto.';
                         }
                         
@@ -409,7 +414,8 @@ const redistribuirFeriasSelecionadas = async (dados) => {
                             periodo_aquisitivo_fim: funcionario.periodo_aquisitivo_atual_fim,
                             status: 'Planejada',
                             observacao,
-                            ajuste_manual: true
+                            ajuste_manual: true,
+                            substituto_id: substituto_id,
                         });
                         calendarioOcupacao[chaveOcupacao]++;
                         dataInicioEncontrada = true;
@@ -430,7 +436,7 @@ const redistribuirFeriasSelecionadas = async (dados) => {
 };
 
 /**
- * Cria um novo registro de férias, calculando a data de fim.
+ * Cria um novo registro de férias.
  */
 const create = async (dadosFerias) => {
     const { matricula_funcionario, data_inicio, qtd_dias, ano_planejamento } = dadosFerias;
@@ -451,18 +457,17 @@ const create = async (dadosFerias) => {
     const dataFimObj = addDays(dataInicioObj, parseInt(qtd_dias, 10) - 1);
     dadosFerias.data_fim = format(dataFimObj, 'yyyy-MM-dd');
     dadosFerias.ajuste_manual = true;
-
-    // ==========================================================
-    // NOVA LÓGICA: VERIFICAÇÃO DE SUBSTITUTO
-    // ==========================================================
+    
+    let substituto_id = null;
     if (dadosFerias.necessidade_substituicao) {
-        const substituto = await findAvailableSubstitute(funcionario, dataInicioObj, dataFimObj, null);
-        if (!substituto) {
-            dadosFerias.observacao = dadosFerias.observacao 
-                ? `${dadosFerias.observacao} | Pendente de alocação de substituto.`
-                : 'Pendente de alocação de substituto.';
+        const substitutoAlocado = await findAndAllocateSubstitute(funcionario, dataInicioObj, dataFimObj, null);
+        if (substitutoAlocado) {
+            substituto_id = substitutoAlocado.id;
+        } else {
+            dadosFerias.observacao = dadosFerias.observacao ? `${dadosFerias.observacao} | Pendente de alocação de substituto.` : 'Pendente de alocação de substituto.';
         }
     }
+    dadosFerias.substituto_id = substituto_id;
 
     return Ferias.create(dadosFerias);
 };
@@ -473,7 +478,15 @@ const create = async (dadosFerias) => {
 async function update(id, dados) {
     const feria = await Ferias.findByPk(id, { include: [Funcionario] });
     if (!feria) throw new Error('Período de férias não encontrado.');
+
+    const eraNecessarioSubstituto = feria.necessidade_substituicao;
+    const seraNecessarioSubstituto = dados.necessidade_substituicao !== undefined ? dados.necessidade_substituicao : eraNecessarioSubstituto;
     
+    if (feria.substituto_id && ( (eraNecessarioSubstituto && !seraNecessarioSubstituto) || dados.data_inicio || dados.qtd_dias)) {
+        await releaseSubstitute(id, null);
+        feria.substituto_id = null;
+    }
+
     const novaQtdDias = dados.qtd_dias !== undefined ? dados.qtd_dias : feria.qtd_dias;
     const novaDataInicio = dados.data_inicio !== undefined ? dados.data_inicio : feria.data_inicio;
     
@@ -482,20 +495,19 @@ async function update(id, dados) {
         const dataFimObj = addDays(dataInicioObj, parseInt(novaQtdDias, 10) - 1);
         dados.data_fim = format(dataFimObj, 'yyyy-MM-dd');
 
-        // ==========================================================
-        // NOVA LÓGICA: VERIFICAÇÃO DE SUBSTITUTO NA ATUALIZAÇÃO
-        // ==========================================================
-        const necessidadeSubstituicao = dados.necessidade_substituicao !== undefined ? dados.necessidade_substituicao : feria.necessidade_substituicao;
-        if (necessidadeSubstituicao) {
-             const substituto = await findAvailableSubstitute(feria.Funcionario, dataInicioObj, dataFimObj, null);
-             if (!substituto) {
-                dados.observacao = feria.observacao 
-                    ? `${feria.observacao} | REVISÃO: Pendente de alocação de substituto.`
-                    : 'Pendente de alocação de substituto.';
+        if (seraNecessarioSubstituto) {
+             const substitutoAlocado = await findAndAllocateSubstitute(feria.Funcionario, dataInicioObj, dataFimObj, null);
+             if (substitutoAlocado) {
+                dados.substituto_id = substitutoAlocado.id;
+             } else {
+                dados.observacao = feria.observacao ? `${feria.observacao} | REVISÃO: Pendente de alocação.` : 'Pendente de alocação de substituto.';
+                dados.substituto_id = null;
              }
+        } else {
+            dados.substituto_id = null;
         }
     }
-
+    
     dados.ajuste_manual = true;
     return feria.update(dados);
 };
@@ -504,6 +516,7 @@ async function update(id, dados) {
  * Remove um registro de férias.
  */
 const remove = async (id) => {
+    await releaseSubstitute(id, null);
     const feria = await Ferias.findByPk(id);
     if (!feria) throw new Error('Período de férias não encontrado.');
     return feria.destroy();
@@ -514,6 +527,9 @@ const remove = async (id) => {
  */
 const bulkRemove = async (ids) => {
     if (!ids || ids.length === 0) throw new Error("Nenhum ID fornecido para exclusão.");
+    for (const id of ids) {
+        await releaseSubstitute(id, null);
+    }
     await Ferias.destroy({ where: { id: { [Op.in]: ids } } });
     return { message: `${ids.length} registros de férias removidos com sucesso.` };
 };
@@ -582,5 +598,5 @@ module.exports = {
     create,
     update,
     remove,
-    bulkRemove, 
+    bulkRemove,
 };
