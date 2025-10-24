@@ -1,0 +1,32 @@
+{
+  "development": {
+    "username": "planilhabd",
+    "password": "planilhabd",
+    "database": "planilhabd",
+    "host": "geral_planilhabd",
+    "port": 5432,
+    "dialect": "postgres"
+  },
+  "test": {
+    "username": "planilhabd",
+    "password": "planilhabd",
+    "database": "planilhabd",
+    "host": "geral_planilhabd",
+    "port": 5432,
+    "dialect": "postgres"
+  },
+  "production": {
+    "username": "planilhabd",
+    "password": "planilhabd",
+    "database": "planilhabd",
+    "host": "geral_planilhabd",
+    "port": 5432,
+    "dialect": "postgres",
+    "dialectOptions": {
+      "ssl": {
+        "require": true,
+        "rejectUnauthorized": false
+      }
+    }
+  }
+}
