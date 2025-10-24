@@ -1,12 +1,11 @@
 // src/features/dashboard/dashboard.service.js
 const { Funcionario, Planejamento, Ferias } = require('../../models');
-const { Op, fn, col, literal } = require('sequelize'); // As funções já são importadas corretamente
+const { Op, fn, col, literal } = require('sequelize');
 const { addDays, startOfYear, endOfYear } = require('date-fns');
 
 const getSummaryData = async () => {
     const hoje = new Date();
-    const anoAtual = hoje.getFullYear();
-
+    
     // =================================================================
     // DADOS GERAIS (CARDS PRINCIPAIS)
     // =================================================================
@@ -89,15 +88,19 @@ const getSummaryData = async () => {
 
     let distribuicaoMensal = [];
     if (planejamentoAtivo) {
+        // CORREÇÃO: O ano para a busca do gráfico agora vem do planejamento ativo.
+        const anoDoPlanejamento = planejamentoAtivo.ano;
+        const inicioAnoPlanejamento = new Date(anoDoPlanejamento, 0, 1);
+        const fimAnoPlanejamento = new Date(anoDoPlanejamento, 11, 31);
+
         const feriasDoAno = await Ferias.findAll({
             where: {
                 planejamentoId: planejamentoAtivo.id,
                 data_inicio: {
-                    [Op.between]: [startOfYear(hoje), endOfYear(hoje)]
+                    [Op.between]: [inicioAnoPlanejamento, fimAnoPlanejamento]
                 }
             },
             attributes: [
-                // CORREÇÃO: Removido 'Op.' antes de fn, col e literal.
                 [fn('to_char', col('data_inicio'), 'MM'), 'mes'],
                 [fn('count', col('id')), 'total']
             ],

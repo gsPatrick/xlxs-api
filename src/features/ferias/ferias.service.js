@@ -243,6 +243,12 @@ async function distribuirFerias(ano, descricao, options = {}) {
         const feriadosDoAno = await getFeriadosNacionais(ano);
         const feriasParaCriar = [];
         const calendarioOcupacao = {};
+        
+        // ==========================================================
+        // CORREÇÃO CRÍTICA (BUG DOS 60 FUNCIONÁRIOS)
+        // O limite foi aumentado de 5 para 500 para acomodar a escala.
+        // ==========================================================
+        const LIMITE_POR_MUNICIPIO_MES = 500;
 
         for (const funcionario of funcionariosElegiveis) {
             const diasDeFerias = funcionario.saldo_dias_ferias;
@@ -271,7 +277,7 @@ async function distribuirFerias(ano, descricao, options = {}) {
                     
                     if (!calendarioOcupacao[chaveOcupacao]) calendarioOcupacao[chaveOcupacao] = 0;
 
-                    if (calendarioOcupacao[chaveOcupacao] < 5) {
+                    if (calendarioOcupacao[chaveOcupacao] < LIMITE_POR_MUNICIPIO_MES) { // Usa o novo limite
                         const dataFim = addDays(dataAtual, diasDeFerias - 1);
                         let observacao = null;
                         let substituto_id = null;
@@ -293,6 +299,10 @@ async function distribuirFerias(ano, descricao, options = {}) {
                             periodo_aquisitivo_fim: funcionario.periodo_aquisitivo_atual_fim,
                             status: 'Planejada',
                             ajuste_manual: false,
+                            // ==========================================================
+                            // CORREÇÃO (BUG DA SUBSTITUIÇÃO "NÃO")
+                            // Garante que o valor seja sempre 'true' na distribuição.
+                            // ==========================================================
                             necessidade_substituicao: true,
                             substituto_id: substituto_id,
                             observacao: observacao
@@ -320,7 +330,7 @@ async function distribuirFerias(ano, descricao, options = {}) {
         if (!transaction) await t.commit();
         
         return { 
-            message: `Distribuição para ${ano} concluída. ${feriasParaCriar.length} períodos planejados e ${feriasManuais.length} preservados.`,
+            message: `Distribuição para ${ano} concluída. ${feriasParaCriar.length} períodos planejados automaticamente e ${feriasManuais.length} preservados.`,
             registrosCriados: feriasParaCriar.length
         };
     } catch(error) {
@@ -329,7 +339,6 @@ async function distribuirFerias(ano, descricao, options = {}) {
         throw error;
     }
 }
-
 /**
  * Redistribui as férias para um grupo selecionado de funcionários.
  */
