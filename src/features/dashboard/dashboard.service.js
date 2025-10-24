@@ -1,6 +1,6 @@
 // src/features/dashboard/dashboard.service.js
 const { Funcionario, Planejamento, Ferias } = require('../../models');
-const { Op } = require('sequelize');
+const { Op, fn, col, literal } = require('sequelize'); // As funções já são importadas corretamente
 const { addDays, startOfYear, endOfYear } = require('date-fns');
 
 const getSummaryData = async () => {
@@ -67,10 +67,7 @@ const getSummaryData = async () => {
             data_inicio: { [Op.gte]: hoje }
         }
     });
-
-    // ==========================================================
-    // NOVA CONTAGEM: Férias pendentes de substituto
-    // ==========================================================
+    
     let pendentesDeSubstituto = 0;
     if (planejamentoAtivo) {
         pendentesDeSubstituto = await Ferias.count({
@@ -86,7 +83,6 @@ const getSummaryData = async () => {
         });
     }
 
-
     // =================================================================
     // DADOS PARA GRÁFICOS (DISTRIBUIÇÃO MENSAL)
     // =================================================================
@@ -101,11 +97,12 @@ const getSummaryData = async () => {
                 }
             },
             attributes: [
-                [Op.fn('to_char', Op.col('data_inicio'), 'MM'), 'mes'],
-                [Op.fn('count', Op.col('id')), 'total']
+                // CORREÇÃO: Removido 'Op.' antes de fn, col e literal.
+                [fn('to_char', col('data_inicio'), 'MM'), 'mes'],
+                [fn('count', col('id')), 'total']
             ],
             group: ['mes'],
-            order: [[Op.literal('mes'), 'ASC']],
+            order: [[literal('mes'), 'ASC']],
             raw: true
         });
         
@@ -128,14 +125,11 @@ const getSummaryData = async () => {
         { title: 'Solicitações Pendentes', count: solicitacoesPendentes, link: '/planejamento?filtro=pendentes', variant: 'neutral' },
     ];
     
-    // ==========================================================
-    // NOVO ITEM DE AÇÃO: Adiciona o card se houver pendências
-    // ==========================================================
     if (pendentesDeSubstituto > 0) {
         itensDeAcao.push({ 
             title: 'Pendente de Substituto', 
             count: pendentesDeSubstituto, 
-            link: '/planejamento?filtro=pendente_substituto', // Link para um futuro filtro na tela de planejamento
+            link: '/planejamento?filtro=pendente_substituto',
             variant: 'warning' 
         });
     }
@@ -148,7 +142,7 @@ const getSummaryData = async () => {
             funcionariosComFeriasPlanejadas,
             percentualPlanejado: `${percentualPlanejado}%`
         },
-        itensDeAcao, // Retorna a lista atualizada
+        itensDeAcao,
         distribuicaoMensal
     };
 };
