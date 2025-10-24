@@ -4,8 +4,8 @@
   "description": "Sistema de distribuição automática de férias",
   "main": "src/app.js",
   "scripts": {
-    "start": "npx sequelize-cli db:migrate && node src/server.js",
-    "dev": "npx sequelize-cli db:migrate && nodemon src/server.js",
+    "start": "npx sequelize-cli db:migrate && node src/app.js",
+    "dev": "npx sequelize-cli db:migrate && nodemon src/app.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
