@@ -1,56 +1,47 @@
 // src/routes/index.js
 
 const express = require('express');
-const router = express.Router();
+const { protect } = require('../features/middleware/auth.middleware');
 
-// Importação de todas as rotas dos features
+// Importar todos os roteadores
 const authRoutes = require('../features/auth/auth.routes');
-const userRoutes = require('../features/user/user.routes');
-const dashboardRoutes = require('../features/dashboard/dashboard.routes');
 const funcionarioRoutes = require('../features/funcionario/funcionario.routes');
 const afastamentoRoutes = require('../features/afastamento/afastamento.routes');
 const feriasRoutes = require('../features/ferias/ferias.routes');
-const planejamentoRoutes = require('../features/planejamento/planejamento.routes');
+const dashboardRoutes = require('../features/dashboard/dashboard.routes');
 const relatoriosRoutes = require('../features/relatorios/relatorios.routes');
+const planejamentoRoutes = require('../features/planejamento/planejamento.routes');
+const userRoutes = require('../features/user/user.routes');
 const alertasRoutes = require('../features/alertas/alertas.routes');
+// ==========================================================
+// NOVA IMPORTAÇÃO
+// ==========================================================
 const jobsRoutes = require('../features/jobs/jobs.routes');
-
-// ==========================================================
-// NOVA IMPORTAÇÃO ADICIONADA AQUI
-// ==========================================================
 const substitutoRoutes = require('../features/substituto/substituto.routes');
 
 
-// Middleware de proteção (se for usar em rotas específicas no futuro)
-const { protect } = require('../middleware/auth.middleware');
+const router = express.Router();
 
-// --- Rotas Públicas ---
+// ROTAS PÚBLICAS
 router.use('/auth', authRoutes);
 
-// --- Rotas Protegidas ---
-// A partir daqui, todas as rotas podem ser protegidas com `protect`
-// Exemplo: router.use('/users', protect, userRoutes);
-// Por enquanto, vamos manter sem o middleware global para seguir o padrão atual.
+// MIDDLEWARE DE PROTEÇÃO
+// router.use(protect); // Descomente para proteger todas as rotas abaixo
 
-router.use('/users', userRoutes);
-router.use('/dashboard', dashboardRoutes);
+// ROTAS PRIVADAS
 router.use('/funcionarios', funcionarioRoutes);
 router.use('/afastamentos', afastamentoRoutes);
 router.use('/ferias', feriasRoutes);
-router.use('/planejamentos', planejamentoRoutes);
+router.use('/dashboard', dashboardRoutes);
 router.use('/relatorios', relatoriosRoutes);
+router.use('/planejamentos', planejamentoRoutes);
+router.use('/users', userRoutes);
 router.use('/alertas', alertasRoutes);
+// ==========================================================
+// NOVO REGISTRO DE ROTA
+// ==========================================================
 router.use('/jobs', jobsRoutes);
-
-// ==========================================================
-// NOVO REGISTRO DE ROTA ADICIONADO AQUI
-// ==========================================================
 router.use('/substitutos', substitutoRoutes);
 
-
-// Rota de health check
-router.get('/health', (req, res) => {
-  res.status(200).send({ status: 'ok', timestamp: new Date() });
-});
 
 module.exports = router;
