@@ -1,11 +1,8 @@
 // src/features/ferias/ferias.service.js
 
-const { Op, fn, col, literal } = require('sequelize');
+const { Op } = require('sequelize');
 const axios = require('axios');
-const { Ferias, Funcionario, Planejamento, Afastamento, sequelize } = require('../../models');
-// ==========================================================
-// ALTERAÇÃO: Importando funções adicionais de date-fns para validação
-// ==========================================================
+const { Ferias, Funcionario, Planejamento, Afastamento, Substituto } = require('../../models'); // NOVO: Importa o modelo Substituto
 const { addYears, addMonths, addDays, differenceInDays, isWithinInterval, getDay, format, getYear, parseISO, startOfDay, isValid } = require('date-fns');
 
 /**
@@ -23,6 +20,71 @@ async function getFeriadosNacionais(ano) {
         return [`${ano}-01-01`, `${ano}-04-21`, `${ano}-05-01`, `${ano}-09-07`, `${ano}-10-12`, `${ano}-11-02`, `${ano}-11-15`, `${ano}-12-25`];
     }
 }
+
+// ======================================================================
+// NOVA FUNÇÃO INTERNA: LÓGICA PARA ENCONTRAR SUBSTITUTOS
+// ======================================================================
+/**
+ * Busca um substituto disponível para um determinado funcionário e período.
+ * @param {object} funcionario - O funcionário que sairá de férias.
+ * @param {Date} dataInicioFerias - Data de início das férias.
+ * @param {Date} dataFimFerias - Data de fim das férias.
+ * @param {object} transaction - A transação do Sequelize.
+ * @returns {Promise<object|null>} O objeto do substituto encontrado ou null.
+ */
+async function findAvailableSubstitute(funcionario, dataInicioFerias, dataFimFerias, transaction) {
+    // 1. Encontra todos os substitutos aptos para o cargo do funcionário
+    const potenciaisSubstitutos = await Substituto.findAll({
+        where: {
+            status: 'Disponível',
+            matricula_funcionario: { [Op.ne]: funcionario.matricula }, // Não pode ser o próprio funcionário
+            cargos_aptos: { [Op.contains]: [funcionario.categoria] } // Verifica se o cargo é compatível
+        },
+        include: [
+            { model: Funcionario, include: ['historicoFerias', 'historicoAfastamentos'] }
+        ],
+        transaction
+    });
+
+    if (!potenciaisSubstitutos.length) {
+        return null;
+    }
+
+    // 2. Itera para encontrar o primeiro que não tenha conflito de agenda
+    for (const substituto of potenciaisSubstitutos) {
+        let temConflito = false;
+        const funcSubstituto = substituto.Funcionario;
+
+        // Verifica conflito com outras férias do substituto
+        for (const ferias of funcSubstituto.historicoFerias) {
+            const feriasInicio = new Date(ferias.data_inicio);
+            const feriasFim = new Date(ferias.data_fim);
+            if (dataInicioFerias <= feriasFim && dataFimFerias >= feriasInicio) {
+                temConflito = true;
+                break;
+            }
+        }
+        if (temConflito) continue;
+
+        // Verifica conflito com afastamentos do substituto
+        for (const afastamento of funcSubstituto.historicoAfastamentos) {
+            const afastamentoInicio = new Date(afastamento.data_inicio);
+            const afastamentoFim = afastamento.data_fim ? new Date(afastamento.data_fim) : new Date('9999-12-31');
+            if (dataInicioFerias <= afastamentoFim && dataFimFerias >= afastamentoInicio) {
+                temConflito = true;
+                break;
+            }
+        }
+        if (temConflito) continue;
+
+        // Se chegou aqui, não há conflitos. Este substituto está disponível.
+        return substituto;
+    }
+
+    // Se o loop terminou, ninguém estava disponível
+    return null;
+}
+
 
 /**
  * RECALCULA O PERÍODO AQUISITIVO E O SALDO DE FÉRIAS DE UM FUNCIONÁRIO.
@@ -109,16 +171,15 @@ function isDataValidaInicio(data, funcionario, feriados) {
         return diaDaSemana !== 0; // Para estas convenções, só não pode iniciar no Domingo
     }
 
-    // Regra geral: Não pode iniciar em Sábado, Domingo ou Sexta-feira
-    if (diaDaSemana === 6 || diaDaSemana === 0 || diaDaSemana === 5) {
+    if (diaDaSemana === 6 || diaDaSemana === 0) { // Não pode iniciar em Sábado ou Domingo
         return false;
     }
-
-    const diaSeguinte = format(addDays(dataChecagem, 1), 'yyyy-MM-dd');
+    
+    const umDiaDepois = format(addDays(dataChecagem, 1), 'yyyy-MM-dd');
     const doisDiasDepois = format(addDays(dataChecagem, 2), 'yyyy-MM-dd');
 
     // Não pode iniciar nos 2 dias que antecedem feriados
-    if (feriados.includes(diaSeguinte) || feriados.includes(doisDiasDepois)) {
+    if (feriados.includes(umDiaDepois) || feriados.includes(doisDiasDepois)) {
         return false;
     }
     
@@ -143,15 +204,10 @@ async function distribuirFerias(ano, descricao, options = {}) {
             descricao: descricao || `Distribuição automática para ${ano}`,
             status: 'ativo'
         }, transactionOptions);
-        console.log(`[LOG FÉRIAS SERVICE] Novo planejamento ID ${novoPlanejamento.id} criado.`);
-
-        // ==========================================================
-        // ALTERAÇÃO: PRESERVAR FÉRIAS MANUAIS
-        // Buscar férias manuais ou confirmadas para excluí-las da redistribuição
-        // ==========================================================
+        
         const feriasManuais = await Ferias.findAll({
             where: {
-                planejamentoId: { [Op.ne]: null }, // De planejamentos anteriores do mesmo ano
+                planejamentoId: { [Op.ne]: null },
                 ajuste_manual: true,
                 status: { [Op.in]: ['Confirmada', 'Planejada'] }
             },
@@ -164,14 +220,11 @@ async function distribuirFerias(ano, descricao, options = {}) {
                 status: 'Ativo',
                 dth_limite_ferias: { [Op.not]: null },
                 situacao_ferias_afastamento_hoje: { [Op.or]: [ { [Op.is]: null }, { [Op.notILike]: '%aviso prévio%' } ] },
-                // Exclui funcionários que já têm férias manuais/confirmadas
                 matricula: { [Op.notIn]: Array.from(matriculasManuais) }
             },
             order: [['dth_limite_ferias', 'ASC']],
             ...transactionOptions
         });
-
-        console.log(`[LOG FÉRIAS SERVICE] ${funcionariosElegiveis.length} funcionários elegíveis encontrados para distribuição automática.`);
         
         if (funcionariosElegiveis.length === 0 && feriasManuais.length === 0) {
             if (!transaction) await t.commit();
@@ -187,26 +240,19 @@ async function distribuirFerias(ano, descricao, options = {}) {
             if (diasDeFerias <= 0) continue;
 
             let dataInicioEncontrada = false;
-            
-            // ==========================================================
-            // CORREÇÃO: Lógica de datas para respeitar o período selecionado
-            // ==========================================================
             let dataAtual;
-            // 1. Usa a data de início fornecida se for válida
+
             if (dataInicioDist && isValid(parseISO(dataInicioDist))) {
                 dataAtual = startOfDay(parseISO(dataInicioDist));
             } else {
-                // 2. Se não, usa a maior data entre hoje e o início do período aquisitivo
                 const hoje = startOfDay(new Date());
                 const inicioPeriodoAquisitivo = startOfDay(new Date(funcionario.periodo_aquisitivo_atual_inicio));
                 dataAtual = hoje > inicioPeriodoAquisitivo ? hoje : inicioPeriodoAquisitivo;
             }
 
-            // 3. Define a data limite da busca
             const dataLimiteBusca = dataFimDist && isValid(parseISO(dataFimDist))
                 ? startOfDay(parseISO(dataFimDist)) 
                 : startOfDay(new Date(funcionario.dth_limite_ferias));
-            // ==========================================================
 
             while (!dataInicioEncontrada && dataAtual < dataLimiteBusca) {
                 if (isDataValidaInicio(format(dataAtual, 'yyyy-MM-dd'), funcionario, feriadosDoAno)) {
@@ -218,6 +264,17 @@ async function distribuirFerias(ano, descricao, options = {}) {
 
                     if (calendarioOcupacao[chaveOcupacao] < 5) {
                         const dataFim = addDays(dataAtual, diasDeFerias - 1);
+                        let observacao = null;
+                        
+                        // ==========================================================
+                        // NOVA LÓGICA: VERIFICAÇÃO DE SUBSTITUTO
+                        // ==========================================================
+                        // A necessidade de substituição é 'true' por padrão no modelo de férias
+                        const substitutoEncontrado = await findAvailableSubstitute(funcionario, dataAtual, dataFim, t);
+                        if (!substitutoEncontrado) {
+                            observacao = 'Pendente de alocação de substituto.';
+                        }
+
                         feriasParaCriar.push({
                             matricula_funcionario: funcionario.matricula,
                             planejamentoId: novoPlanejamento.id,
@@ -227,7 +284,9 @@ async function distribuirFerias(ano, descricao, options = {}) {
                             periodo_aquisitivo_inicio: funcionario.periodo_aquisitivo_atual_inicio,
                             periodo_aquisitivo_fim: funcionario.periodo_aquisitivo_atual_fim,
                             status: 'Planejada',
-                            ajuste_manual: false // Gerado automaticamente
+                            ajuste_manual: false,
+                            necessidade_substituicao: true,
+                            observacao: observacao // Adiciona a observação
                         });
                         calendarioOcupacao[chaveOcupacao]++;
                         dataInicioEncontrada = true;
@@ -237,28 +296,22 @@ async function distribuirFerias(ano, descricao, options = {}) {
             }
         }
 
-        console.log(`[LOG FÉRIAS SERVICE] ${feriasParaCriar.length} registros de férias automáticas serão criados.`);
-
         if (feriasParaCriar.length > 0) {
             await Ferias.bulkCreate(feriasParaCriar, transactionOptions);
         }
         
-        // ==========================================================
-        // ALTERAÇÃO: Reassociar as férias manuais ao novo planejamento
-        // ==========================================================
         if (feriasManuais.length > 0) {
             const idsFeriasManuais = feriasManuais.map(f => f.id);
             await Ferias.update(
                 { planejamentoId: novoPlanejamento.id },
                 { where: { id: { [Op.in]: idsFeriasManuais } }, ...transactionOptions }
             );
-            console.log(`[LOG FÉRIAS SERVICE] ${feriasManuais.length} registros manuais foram preservados e associados ao novo planejamento.`);
         }
         
         if (!transaction) await t.commit();
         
         return { 
-            message: `Distribuição para ${ano} concluída. ${feriasParaCriar.length} períodos planejados automaticamente e ${feriasManuais.length} preservados.`,
+            message: `Distribuição para ${ano} concluída. ${feriasParaCriar.length} períodos planejados e ${feriasManuais.length} preservados.`,
             registrosCriados: feriasParaCriar.length
         };
     } catch(error) {
@@ -287,13 +340,12 @@ const redistribuirFeriasSelecionadas = async (dados) => {
         const planejamentoAtivo = await Planejamento.findOne({ where: { ano, status: 'ativo' }, ...options });
         if (!planejamentoAtivo) throw new Error(`Nenhum planejamento ativo para o ano ${ano}.`);
         
-        console.log(`[LOG REDISTRIBUIÇÃO] Removendo ${matriculas.length} férias antigas (não manuais) do planejamento ${planejamentoAtivo.id}.`);
         await Ferias.destroy({
             where: {
                 matricula_funcionario: { [Op.in]: matriculas },
                 planejamentoId: planejamentoAtivo.id,
                 status: 'Planejada',
-                ajuste_manual: false // Só remove as geradas automaticamente
+                ajuste_manual: false
             },
             ...options
         });
@@ -309,7 +361,7 @@ const redistribuirFeriasSelecionadas = async (dados) => {
             return { message: "Nenhum funcionário ativo encontrado para as matrículas fornecidas." };
         }
 
-        const outrasFerias = await Ferias.findAll({ where: { planejamentoId: planejamentoAtivo.id, matricula_funcionario: { [Op.notIn]: matriculas } }, ...options });
+        const outrasFerias = await Ferias.findAll({ where: { planejamentoId: planejamentoAtivo.id, matricula_funcionario: { [Op.notIn]: matriculas } }, include: [Funcionario], ...options });
         const calendarioOcupacao = {};
         outrasFerias.forEach(f => {
             const dataRef = parseISO(f.data_inicio);
@@ -337,6 +389,16 @@ const redistribuirFeriasSelecionadas = async (dados) => {
                     if (!calendarioOcupacao[chaveOcupacao]) calendarioOcupacao[chaveOcupacao] = 0;
                     if (calendarioOcupacao[chaveOcupacao] < 5) {
                         const dataFimCalculada = addDays(dataAtual, diasDeFerias - 1);
+                        let observacao = descricao || 'Redistribuição em massa';
+                        
+                        // ==========================================================
+                        // NOVA LÓGICA: VERIFICAÇÃO DE SUBSTITUTO
+                        // ==========================================================
+                        const substitutoEncontrado = await findAvailableSubstitute(funcionario, dataAtual, dataFimCalculada, t);
+                        if (!substitutoEncontrado) {
+                            observacao = observacao ? `${observacao} | Pendente de alocação de substituto.` : 'Pendente de alocação de substituto.';
+                        }
+                        
                         novasFeriasParaCriar.push({
                             matricula_funcionario: funcionario.matricula,
                             planejamentoId: planejamentoAtivo.id,
@@ -346,8 +408,8 @@ const redistribuirFeriasSelecionadas = async (dados) => {
                             periodo_aquisitivo_inicio: funcionario.periodo_aquisitivo_atual_inicio,
                             periodo_aquisitivo_fim: funcionario.periodo_aquisitivo_atual_fim,
                             status: 'Planejada',
-                            observacao: descricao || 'Redistribuição em massa',
-                            ajuste_manual: true // Marcado como ajuste manual
+                            observacao,
+                            ajuste_manual: true
                         });
                         calendarioOcupacao[chaveOcupacao]++;
                         dataInicioEncontrada = true;
@@ -375,39 +437,41 @@ const create = async (dadosFerias) => {
     if (!matricula_funcionario || !data_inicio || !qtd_dias || !ano_planejamento) {
         throw new Error("Matrícula, data de início, dias e ano do planejamento são obrigatórios.");
     }
+    
+    const funcionario = await Funcionario.findByPk(matricula_funcionario);
+    if(!funcionario) throw new Error('Funcionário não encontrado.');
+
     const planejamentoAtivo = await Planejamento.findOne({ where: { ano: ano_planejamento, status: 'ativo' } });
     if (!planejamentoAtivo) {
         throw new Error(`Nenhum planejamento ativo encontrado para o ano ${ano_planejamento}.`);
     }
+
     dadosFerias.planejamentoId = planejamentoAtivo.id;
     const dataInicioObj = new Date(`${data_inicio}T00:00:00`);
     const dataFimObj = addDays(dataInicioObj, parseInt(qtd_dias, 10) - 1);
     dadosFerias.data_fim = format(dataFimObj, 'yyyy-MM-dd');
-    // ==========================================================
-    // ALTERAÇÃO: Marca como ajuste manual
-    // ==========================================================
     dadosFerias.ajuste_manual = true;
+
+    // ==========================================================
+    // NOVA LÓGICA: VERIFICAÇÃO DE SUBSTITUTO
+    // ==========================================================
+    if (dadosFerias.necessidade_substituicao) {
+        const substituto = await findAvailableSubstitute(funcionario, dataInicioObj, dataFimObj, null);
+        if (!substituto) {
+            dadosFerias.observacao = dadosFerias.observacao 
+                ? `${dadosFerias.observacao} | Pendente de alocação de substituto.`
+                : 'Pendente de alocação de substituto.';
+        }
+    }
+
     return Ferias.create(dadosFerias);
 };
-
-/**
- * Busca todos os registros de férias com filtros.
- */
-async function findAll(queryParams) {
-    const includeClause = [ { model: Funcionario, required: true }, { model: Planejamento, required: false } ];
-    const whereClause = {};
-    if (queryParams.planejamento === 'ativo') {
-        whereClause['$Planejamento.status$'] = 'ativo';
-        includeClause[1].required = true;
-    }
-    return Ferias.findAll({ where: whereClause, include: includeClause, order: [['data_inicio', 'ASC']] });
-}
 
 /**
  * Atualiza um registro de férias.
  */
 async function update(id, dados) {
-    const feria = await Ferias.findByPk(id);
+    const feria = await Ferias.findByPk(id, { include: [Funcionario] });
     if (!feria) throw new Error('Período de férias não encontrado.');
     
     const novaQtdDias = dados.qtd_dias !== undefined ? dados.qtd_dias : feria.qtd_dias;
@@ -417,10 +481,21 @@ async function update(id, dados) {
         const dataInicioObj = new Date(`${novaDataInicio}T00:00:00`);
         const dataFimObj = addDays(dataInicioObj, parseInt(novaQtdDias, 10) - 1);
         dados.data_fim = format(dataFimObj, 'yyyy-MM-dd');
+
+        // ==========================================================
+        // NOVA LÓGICA: VERIFICAÇÃO DE SUBSTITUTO NA ATUALIZAÇÃO
+        // ==========================================================
+        const necessidadeSubstituicao = dados.necessidade_substituicao !== undefined ? dados.necessidade_substituicao : feria.necessidade_substituicao;
+        if (necessidadeSubstituicao) {
+             const substituto = await findAvailableSubstitute(feria.Funcionario, dataInicioObj, dataFimObj, null);
+             if (!substituto) {
+                dados.observacao = feria.observacao 
+                    ? `${feria.observacao} | REVISÃO: Pendente de alocação de substituto.`
+                    : 'Pendente de alocação de substituto.';
+             }
+        }
     }
-    // ==========================================================
-    // ALTERAÇÃO: Marca como ajuste manual
-    // ==========================================================
+
     dados.ajuste_manual = true;
     return feria.update(dados);
 };
@@ -434,12 +509,14 @@ const remove = async (id) => {
     return feria.destroy();
 };
 
+/**
+ * Remove múltiplos registros de férias.
+ */
 const bulkRemove = async (ids) => {
     if (!ids || ids.length === 0) throw new Error("Nenhum ID fornecido para exclusão.");
     await Ferias.destroy({ where: { id: { [Op.in]: ids } } });
     return { message: `${ids.length} registros de férias removidos com sucesso.` };
 };
-
 
 /**
  * Busca todos os registros de férias do planejamento ativo com filtros e paginação.
@@ -464,10 +541,6 @@ const findAllPaginated = async (queryParams) => {
     if (queryParams.categoria) { whereFuncionario.categoria = { [Op.iLike]: `%${queryParams.categoria}%` }; }
     if (queryParams.des_grupo_contrato) { whereFuncionario.des_grupo_contrato = { [Op.iLike]: `%${queryParams.des_grupo_contrato}%` }; }
     if (queryParams.municipio_local_trabalho) { whereFuncionario.municipio_local_trabalho = { [Op.iLike]: `%${queryParams.municipio_local_trabalho}%` }; }
-    
-    // ==========================================================
-    // ALTERAÇÃO: Adicionados novos filtros
-    // ==========================================================
     if (queryParams.escala) { whereFuncionario.escala = { [Op.iLike]: `%${queryParams.escala}%` }; }
     if (queryParams.sigla_local) { whereFuncionario.sigla_local = { [Op.iLike]: `%${queryParams.sigla_local}%` }; }
     if (queryParams.cliente) { whereFuncionario.cliente = { [Op.iLike]: `%${queryParams.cliente}%` }; }
@@ -510,5 +583,4 @@ module.exports = {
     update,
     remove,
     bulkRemove, 
-    findAll
 };

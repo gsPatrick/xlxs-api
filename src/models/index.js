@@ -10,7 +10,7 @@ db.Ferias = require('./ferias.model');
 db.Afastamento = require('./afastamento.model');
 db.Planejamento = require('./planejamento.model');
 db.User = require('./user.model');
-
+db.Substituto = require('./substituto.model');
 // ==========================================================
 // DEFINIÇÃO CORRETA E CENTRALIZADA DAS ASSOCIAÇÕES
 // ==========================================================
@@ -24,6 +24,9 @@ db.Funcionario.hasMany(db.Ferias, {
 db.Ferias.belongsTo(db.Funcionario, { 
     foreignKey: 'matricula_funcionario' 
 });
+
+db.Funcionario.hasOne(db.Substituto, { foreignKey: 'matricula_funcionario' });
+db.Substituto.belongsTo(db.Funcionario, { foreignKey: 'matricula_funcionario' });
 
 // Um Funcionário pode ter muitos Afastamentos.
 // A chave estrangeira `matricula_funcionario` será adicionada ao modelo Afastamento.
