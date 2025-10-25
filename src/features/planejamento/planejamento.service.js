@@ -2,14 +2,13 @@
 
 const { Planejamento, Ferias, Afastamento, Funcionario } = require('../../models');
 const db = require('../../models');
-const { startOfMonth, endOfMonth, parseISO } = require('date-fns');
+const { startOfMonth, endOfMonth, startOfYear, endOfYear } = require('date-fns');
 const { Op } = require('sequelize');
 
 /**
- * Busca o histórico de planejamentos.
+ * Busca o histórico de planejamentos, com opção de filtro por ano.
  */
 const findAll = async (queryParams) => {
-    // ... (código existente inalterado)
     const whereClause = {};
     if(queryParams.ano) {
         whereClause.ano = queryParams.ano;
@@ -21,10 +20,9 @@ const findAll = async (queryParams) => {
 };
 
 /**
- * Ativa (restaura) um planejamento arquivado.
+ * Ativa (restaura) um planejamento arquivado, arquivando o que estava ativo anteriormente para o mesmo ano.
  */
 const ativar = async (id) => {
-    // ... (código existente inalterado)
     const t = await db.sequelize.transaction();
     try {
         const planejamentoParaAtivar = await Planejamento.findByPk(id, { transaction: t });
@@ -32,9 +30,17 @@ const ativar = async (id) => {
             throw new Error('Planejamento não encontrado.');
         }
 
+        // Arquiva qualquer outro planejamento que esteja ativo para o mesmo ano
         await Planejamento.update(
             { status: 'arquivado' },
-            { where: { ano: planejamentoParaAtivar.ano, status: 'ativo' }, transaction: t }
+            { 
+                where: { 
+                    ano: planejamentoParaAtivar.ano, 
+                    status: 'ativo',
+                    id: { [Op.ne]: id } // Não arquiva o próprio planejamento que estamos prestes a ativar
+                }, 
+                transaction: t 
+            }
         );
 
         planejamentoParaAtivar.status = 'ativo';
@@ -48,90 +54,91 @@ const ativar = async (id) => {
     }
 };
 
-
-// ======================================================================
-// ALTERADO: Função `getVisaoGeral` expandida com novos filtros
-// ======================================================================
 /**
  * Busca uma visão geral de todas as ausências (férias e afastamentos)
- * para um determinado mês e ano, com filtros.
- * @param {object} queryParams - Parâmetros da query, como { mes: 5, ano: 2024, grupoContrato: 'GERAL' }.
- * @returns {Promise<Array<object>>} Uma lista de eventos de ausência.
+ * para um determinado ano (e opcionalmente mês), com filtros.
+ * VERSÃO CORRIGIDA
  */
 const getVisaoGeral = async (queryParams) => {
     const ano = parseInt(queryParams.ano, 10);
-    const mes = parseInt(queryParams.mes, 10);
+    const mes = queryParams.mes ? parseInt(queryParams.mes, 10) : null;
 
-    if (!ano || !mes) {
-        throw new Error("Ano e mês são obrigatórios.");
+    if (!ano) {
+        throw new Error("O ano é obrigatório.");
     }
 
-    const dataReferencia = new Date(ano, mes - 1);
-    const inicioMes = startOfMonth(dataReferencia);
-    const fimMes = endOfMonth(dataReferencia);
+    // Define o intervalo de busca: ou um mês específico, ou o ano inteiro
+    const inicioBusca = mes ? startOfMonth(new Date(ano, mes - 1)) : startOfYear(new Date(ano, 0, 1));
+    const fimBusca = mes ? endOfMonth(new Date(ano, mes - 1)) : endOfYear(new Date(ano, 11, 31));
 
     const whereFuncionario = {};
-    if (queryParams.grupoContrato) { whereFuncionario.des_grupo_contrato = queryParams.grupoContrato; }
-    if (queryParams.municipio) { whereFuncionario.municipio_local_trabalho = queryParams.municipio; }
-    if (queryParams.categoria) { whereFuncionario.categoria = queryParams.categoria; }
-    if (queryParams.tipoContrato) { whereFuncionario.categoria_trab = queryParams.tipoContrato; }
-    if (queryParams.estado) { whereFuncionario.sigla_local = queryParams.estado; }
-    if (queryParams.cliente) { whereFuncionario.cliente = queryParams.cliente; } // NOVO FILTRO
-    if (queryParams.contrato) { whereFuncionario.contrato = queryParams.contrato; } // NOVO FILTRO
+    if (queryParams.grupoContrato) { whereFuncionario.des_grupo_contrato = { [Op.iLike]: `%${queryParams.grupoContrato}%` }; }
+    if (queryParams.municipio) { whereFuncionario.municipio_local_trabalho = { [Op.iLike]: `%${queryParams.municipio}%` }; }
+    if (queryParams.categoria) { whereFuncionario.categoria = { [Op.iLike]: `%${queryParams.categoria}%` }; }
+    if (queryParams.tipoContrato) { whereFuncionario.categoria_trab = { [Op.iLike]: `%${queryParams.tipoContrato}%` }; }
+    if (queryParams.estado) { whereFuncionario.sigla_local = { [Op.iLike]: `%${queryParams.estado}%` }; }
+    if (queryParams.cliente) { whereFuncionario.cliente = { [Op.iLike]: `%${queryParams.cliente}%` }; }
+    if (queryParams.contrato) { whereFuncionario.contrato = { [Op.iLike]: `%${queryParams.contrato}%` }; }
 
-    const feriasNoMes = await Ferias.findAll({
-        where: {
-            [Op.or]: [
-                { data_inicio: { [Op.between]: [inicioMes, fimMes] } },
-                { data_fim: { [Op.between]: [inicioMes, fimMes] } },
-                { [Op.and]: [ { data_inicio: { [Op.lte]: inicioMes } }, { data_fim: { [Op.gte]: fimMes } } ]}
-            ]
-        },
+    // Condição para encontrar qualquer evento que se sobreponha ao período de busca
+    const whereEventos = {
+        [Op.or]: [
+            { data_inicio: { [Op.between]: [inicioBusca, fimBusca] } },
+            { data_fim: { [Op.between]: [inicioBusca, fimBusca] } },
+            { [Op.and]: [ { data_inicio: { [Op.lte]: fimBusca } }, { data_fim: { [Op.gte]: inicioBusca } } ]}
+        ]
+    };
+
+    const feriasNoPeriodo = await Ferias.findAll({
+        where: whereEventos,
         include: [{ 
             model: Funcionario, 
-            attributes: ['nome_funcionario'],
+            attributes: ['nome_funcionario', 'matricula'],
             where: whereFuncionario,
             required: true
         }]
     });
 
-    const afastamentosNoMes = await Afastamento.findAll({
-        where: {
-            [Op.or]: [
-                { data_inicio: { [Op.between]: [inicioMes, fimMes] } },
-                { data_fim: { [Op.between]: [inicioMes, fimMes] } },
-                { [Op.and]: [ { data_inicio: { [Op.lte]: inicioMes } }, { data_fim: { [Op.gte]: fimMes } } ]}
-            ]
-        },
+    const afastamentosNoPeriodo = await Afastamento.findAll({
+        where: whereEventos,
         include: [{ 
             model: Funcionario, 
-            attributes: ['nome_funcionario'],
+            attributes: ['nome_funcionario', 'matricula'],
             where: whereFuncionario,
             required: true
         }]
     });
 
     const eventos = [];
-    feriasNoMes.forEach(f => {
+    feriasNoPeriodo.forEach(f => {
         eventos.push({
-            id: `ferias-${f.id}`, tipo: 'Férias', data_inicio: f.data_inicio, data_fim: f.data_fim, status: f.status,
-            funcionario: f.Funcionario.nome_funcionario, matricula: f.matricula_funcionario
+            id: `ferias-${f.id}`,
+            tipo: 'Férias',
+            data_inicio: f.data_inicio,
+            data_fim: f.data_fim,
+            status: f.status,
+            funcionario: f.Funcionario.nome_funcionario,
+            matricula: f.Funcionario.matricula
         });
     });
 
-    afastamentosNoMes.forEach(a => {
+    afastamentosNoPeriodo.forEach(a => {
         eventos.push({
-            id: `afastamento-${a.id}`, tipo: 'Afastamento', data_inicio: a.data_inicio, data_fim: a.data_fim, status: a.motivo,
-            funcionario: a.Funcionario.nome_funcionario, matricula: a.matricula_funcionario
+            id: `afastamento-${a.id}`,
+            tipo: 'Afastamento',
+            data_inicio: a.data_inicio,
+            data_fim: a.data_fim,
+            status: a.motivo,
+            funcionario: a.Funcionario.nome_funcionario,
+            matricula: a.Funcionario.matricula
         });
     });
 
+    // Ordena os eventos combinados pela data de início
     eventos.sort((a, b) => new Date(a.data_inicio) - new Date(b.data_inicio));
 
     return eventos;
 };
-
-
 
 module.exports = {
     findAll,

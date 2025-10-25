@@ -1,6 +1,6 @@
 // src/features/ferias/ferias.service.js
 
-const { Op } = require('sequelize');
+const { Op, fn, col, literal } = require('sequelize');
 const axios = require('axios');
 const { Ferias, Funcionario, Planejamento, Afastamento, Substituto, sequelize } = require('../../models');
 const { addYears, addMonths, addDays, differenceInDays, isWithinInterval, getDay, format, getYear, parseISO, startOfDay, isValid } = require('date-fns');
@@ -17,6 +17,7 @@ async function getFeriadosNacionais(ano) {
         return feriados;
     } catch (error) {
         console.error(`Falha ao buscar feriados da BrasilAPI para o ano ${ano}. Usando lista de fallback.`, error.message);
+        // Incluindo 01/01 como feriado fixo
         return [`${ano}-01-01`, `${ano}-04-21`, `${ano}-05-01`, `${ano}-09-07`, `${ano}-10-12`, `${ano}-11-02`, `${ano}-11-15`, `${ano}-12-25`];
     }
 }
@@ -96,30 +97,43 @@ async function recalcularPeriodoAquisitivo(matricula) {
 
 /**
  * Função auxiliar para verificar se a data de início das férias é válida.
+ * VERSÃO CORRIGIDA E MAIS PRECISA
  */
 function isDataValidaInicio(data, funcionario, feriados) {
     const dataChecagem = new Date(`${data}T12:00:00Z`);
-    const diaDaSemana = getDay(dataChecagem);
+    const diaDaSemana = getDay(dataChecagem); // Domingo = 0, ... Sábado = 6
 
+    // REGRA 1: Não pode iniciar em um feriado.
+    const dataFormatada = format(dataChecagem, 'yyyy-MM-dd');
+    if (feriados.includes(dataFormatada)) {
+        return false;
+    }
+
+    // REGRA 2: Exceções para convenções específicas (só não pode iniciar aos domingos)
     const convencoesExcecao = ['SEEACEPI', 'SECAPI Interior'];
     if (funcionario.convencao && convencoesExcecao.some(c => funcionario.convencao.includes(c))) {
-        return diaDaSemana !== 0; // Para estas convenções, só não pode iniciar no Domingo
+        return diaDaSemana !== 0; // Retorna true se não for domingo
     }
 
-    if (diaDaSemana === 6 || diaDaSemana === 0) { // Não pode iniciar em Sábado ou Domingo
+    // REGRA 3: REGRA GERAL - Para quem não atua em 12x36, não pode iniciar nos dois dias que antecedem o repouso semanal (Domingo).
+    // Ou seja, não pode iniciar na Sexta-feira (5) ou no Sábado (6).
+    // Assumimos que quem não tem convenção de exceção, cai na regra geral.
+    if (diaDaSemana === 5 || diaDaSemana === 6) {
         return false;
     }
-    
-    const umDiaDepois = format(addDays(dataChecagem, 1), 'yyyy-MM-dd');
+
+    // REGRA 4: REGRA GERAL - Não pode iniciar nos dois dias que antecedem um feriado.
+    const diaSeguinte = format(addDays(dataChecagem, 1), 'yyyy-MM-dd');
     const doisDiasDepois = format(addDays(dataChecagem, 2), 'yyyy-MM-dd');
 
-    // Não pode iniciar nos 2 dias que antecedem feriados
-    if (feriados.includes(umDiaDepois) || feriados.includes(doisDiasDepois)) {
+    if (feriados.includes(diaSeguinte) || feriados.includes(doisDiasDepois)) {
         return false;
     }
     
+    // Se passou por todas as regras, a data é válida.
     return true;
 };
+
 
 /**
  * Busca e aloca um substituto disponível para um período.
@@ -148,7 +162,6 @@ async function findAndAllocateSubstitute(funcionario, dataInicioFerias, dataFimF
         for (const substituto of potenciaisSubstitutos) {
             let temConflito = false;
             
-            // Verifica se o substituto já não está alocado em outras férias no mesmo período
             const alocacoes = await Ferias.findAll({ where: { substituto_id: substituto.id }, transaction: t });
             for (const aloc of alocacoes) {
                  if (dataInicioFerias <= new Date(aloc.data_fim) && dataFimFerias >= new Date(aloc.data_inicio)) {
@@ -158,7 +171,6 @@ async function findAndAllocateSubstitute(funcionario, dataInicioFerias, dataFimF
             }
             if(temConflito) continue;
 
-            // Se chegou aqui, o substituto está disponível
             await substituto.update({ status: 'Alocado' }, { transaction: t });
             if (!transaction) await t.commit();
             return substituto;
@@ -231,6 +243,7 @@ async function distribuirFerias(ano, descricao, options = {}) {
                 situacao_ferias_afastamento_hoje: { [Op.or]: [ { [Op.is]: null }, { [Op.notILike]: '%aviso prévio%' } ] },
                 matricula: { [Op.notIn]: Array.from(matriculasManuais) }
             },
+            include: ['historicoFerias'],
             order: [['dth_limite_ferias', 'ASC']],
             ...transactionOptions
         });
@@ -243,42 +256,58 @@ async function distribuirFerias(ano, descricao, options = {}) {
         const feriadosDoAno = await getFeriadosNacionais(ano);
         const feriasParaCriar = [];
         const calendarioOcupacao = {};
-        
-        // ==========================================================
-        // CORREÇÃO CRÍTICA (BUG DOS 60 FUNCIONÁRIOS)
-        // O limite foi aumentado de 5 para 500 para acomodar a escala.
-        // ==========================================================
         const LIMITE_POR_MUNICIPIO_MES = 500;
 
         for (const funcionario of funcionariosElegiveis) {
-            const diasDeFerias = funcionario.saldo_dias_ferias;
-            if (diasDeFerias <= 0) continue;
+            const diasJaGozados = (funcionario.historicoFerias || [])
+                .filter(f => new Date(f.periodo_aquisitivo_inicio).getTime() === new Date(funcionario.periodo_aquisitivo_atual_inicio).getTime())
+                .reduce((acc, f) => acc + f.qtd_dias, 0);
 
-            let dataInicioEncontrada = false;
-            let dataAtual;
-
-            if (dataInicioDist && isValid(parseISO(dataInicioDist))) {
-                dataAtual = startOfDay(parseISO(dataInicioDist));
-            } else {
-                const hoje = startOfDay(new Date());
-                const inicioPeriodoAquisitivo = startOfDay(new Date(funcionario.periodo_aquisitivo_atual_inicio));
-                dataAtual = hoje > inicioPeriodoAquisitivo ? hoje : inicioPeriodoAquisitivo;
+            const diasDeFerias = funcionario.saldo_dias_ferias - diasJaGozados;
+            
+            if (diasDeFerias <= 0) {
+                console.log(`[INFO] Funcionário ${funcionario.matricula} já gozou todas as férias do período. Pulando.`);
+                continue;
             }
 
-            const dataLimiteBusca = dataFimDist && isValid(parseISO(dataFimDist))
-                ? startOfDay(parseISO(dataFimDist)) 
-                : startOfDay(new Date(funcionario.dth_limite_ferias));
+            let dataInicioEncontrada = false;
+            
+            const hoje = startOfDay(new Date());
+            const inicioPeriodoAquisitivo = startOfDay(new Date(funcionario.periodo_aquisitivo_atual_inicio));
+            
+            let dataDePartida = hoje > inicioPeriodoAquisitivo ? hoje : inicioPeriodoAquisitivo;
+
+            if (dataInicioDist && isValid(parseISO(dataInicioDist))) {
+                const dataInicioUsuario = startOfDay(parseISO(dataInicioDist));
+                dataDePartida = dataInicioUsuario > dataDePartida ? dataInicioUsuario : dataDePartida;
+            }
+
+            const dataLimiteFuncionario = startOfDay(new Date(funcionario.dth_limite_ferias));
+            let dataLimiteBusca = dataLimiteFuncionario;
+            if (dataFimDist && isValid(parseISO(dataFimDist))) {
+                const dataFimUsuario = startOfDay(parseISO(dataFimDist));
+                dataLimiteBusca = dataFimUsuario < dataLimiteFuncionario ? dataFimUsuario : dataLimiteFuncionario;
+            }
+
+            let dataAtual = dataDePartida;
 
             while (!dataInicioEncontrada && dataAtual < dataLimiteBusca) {
-                if (isDataValidaInicio(format(dataAtual, 'yyyy-MM-dd'), funcionario, feriadosDoAno)) {
+                const dataAtualFormatada = format(dataAtual, 'yyyy-MM-dd');
+
+                if (isDataValidaInicio(dataAtualFormatada, funcionario, feriadosDoAno)) {
                     const mes = dataAtual.toLocaleString('pt-BR', { month: 'long' });
                     const municipio = funcionario.municipio_local_trabalho || 'N/A';
                     const chaveOcupacao = `${municipio}-${mes}`;
                     
                     if (!calendarioOcupacao[chaveOcupacao]) calendarioOcupacao[chaveOcupacao] = 0;
 
-                    if (calendarioOcupacao[chaveOcupacao] < LIMITE_POR_MUNICIPIO_MES) { // Usa o novo limite
+                    if (calendarioOcupacao[chaveOcupacao] < LIMITE_POR_MUNICIPIO_MES) {
                         const dataFim = addDays(dataAtual, diasDeFerias - 1);
+                        if (dataFim > dataLimiteBusca) {
+                             dataAtual = addDays(dataAtual, 1);
+                             continue;
+                        }
+
                         let observacao = null;
                         let substituto_id = null;
                         
@@ -292,17 +321,13 @@ async function distribuirFerias(ano, descricao, options = {}) {
                         feriasParaCriar.push({
                             matricula_funcionario: funcionario.matricula,
                             planejamentoId: novoPlanejamento.id,
-                            data_inicio: format(dataAtual, 'yyyy-MM-dd'),
+                            data_inicio: dataAtualFormatada,
                             data_fim: format(dataFim, 'yyyy-MM-dd'),
                             qtd_dias: diasDeFerias,
                             periodo_aquisitivo_inicio: funcionario.periodo_aquisitivo_atual_inicio,
                             periodo_aquisitivo_fim: funcionario.periodo_aquisitivo_atual_fim,
                             status: 'Planejada',
                             ajuste_manual: false,
-                            // ==========================================================
-                            // CORREÇÃO (BUG DA SUBSTITUIÇÃO "NÃO")
-                            // Garante que o valor seja sempre 'true' na distribuição.
-                            // ==========================================================
                             necessidade_substituicao: true,
                             substituto_id: substituto_id,
                             observacao: observacao
@@ -312,6 +337,10 @@ async function distribuirFerias(ano, descricao, options = {}) {
                     }
                 }
                 dataAtual = addDays(dataAtual, 1);
+            }
+
+            if (!dataInicioEncontrada) {
+                console.warn(`[AVISO] Não foi possível encontrar uma data válida para o funcionário ${funcionario.matricula} dentro do período e regras.`);
             }
         }
 
@@ -339,6 +368,7 @@ async function distribuirFerias(ano, descricao, options = {}) {
         throw error;
     }
 }
+
 /**
  * Redistribui as férias para um grupo selecionado de funcionários.
  */
@@ -401,7 +431,7 @@ const redistribuirFeriasSelecionadas = async (dados) => {
                     const municipio = funcionario.municipio_local_trabalho || 'N/A';
                     const chaveOcupacao = `${municipio}-${mes}`;
                     if (!calendarioOcupacao[chaveOcupacao]) calendarioOcupacao[chaveOcupacao] = 0;
-                    if (calendarioOcupacao[chaveOcupacao] < 5) {
+                    if (calendarioOcupacao[chaveOcupacao] < 500) {
                         const dataFimCalculada = addDays(dataAtual, diasDeFerias - 1);
                         let observacao = descricao || 'Redistribuição em massa';
                         let substituto_id = null;
