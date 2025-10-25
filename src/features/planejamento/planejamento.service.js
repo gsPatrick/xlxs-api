@@ -61,26 +61,16 @@ const ativar = async (id) => {
  */
 const getVisaoGeral = async (queryParams) => {
     const ano = parseInt(queryParams.ano, 10);
-    const mes = queryParams.mes ? parseInt(queryParams.mes, 10) : null;
-
+    
     if (!ano) {
         throw new Error("O ano é obrigatório.");
     }
 
-    // Define o intervalo de busca: ou um mês específico, ou o ano inteiro
-    const inicioBusca = mes ? startOfMonth(new Date(ano, mes - 1)) : startOfYear(new Date(ano, 0, 1));
-    const fimBusca = mes ? endOfMonth(new Date(ano, mes - 1)) : endOfYear(new Date(ano, 11, 31));
+    // Define o intervalo de busca para o ano inteiro
+    const inicioBusca = startOfYear(new Date(ano, 0, 1));
+    const fimBusca = endOfYear(new Date(ano, 11, 31));
 
-    const whereFuncionario = {};
-    if (queryParams.grupoContrato) { whereFuncionario.des_grupo_contrato = { [Op.iLike]: `%${queryParams.grupoContrato}%` }; }
-    if (queryParams.municipio) { whereFuncionario.municipio_local_trabalho = { [Op.iLike]: `%${queryParams.municipio}%` }; }
-    if (queryParams.categoria) { whereFuncionario.categoria = { [Op.iLike]: `%${queryParams.categoria}%` }; }
-    if (queryParams.tipoContrato) { whereFuncionario.categoria_trab = { [Op.iLike]: `%${queryParams.tipoContrato}%` }; }
-    if (queryParams.estado) { whereFuncionario.sigla_local = { [Op.iLike]: `%${queryParams.estado}%` }; }
-    if (queryParams.cliente) { whereFuncionario.cliente = { [Op.iLike]: `%${queryParams.cliente}%` }; }
-    if (queryParams.contrato) { whereFuncionario.contrato = { [Op.iLike]: `%${queryParams.contrato}%` }; }
-
-    // Condição para encontrar qualquer evento que se sobreponha ao período de busca
+    // Condição para encontrar qualquer evento que se sobreponha ao período de busca do ano
     const whereEventos = {
         [Op.or]: [
             { data_inicio: { [Op.between]: [inicioBusca, fimBusca] } },
@@ -89,22 +79,20 @@ const getVisaoGeral = async (queryParams) => {
         ]
     };
 
+    // Busca todas as férias no período, incluindo os dados completos do funcionário para filtragem no frontend
     const feriasNoPeriodo = await Ferias.findAll({
         where: whereEventos,
         include: [{ 
-            model: Funcionario, 
-            attributes: ['nome_funcionario', 'matricula'],
-            where: whereFuncionario,
-            required: true
+            model: Funcionario,
+            required: true // Garante que só traga férias de funcionários existentes
         }]
     });
 
+    // Busca todos os afastamentos no período, incluindo os dados completos do funcionário
     const afastamentosNoPeriodo = await Afastamento.findAll({
         where: whereEventos,
         include: [{ 
-            model: Funcionario, 
-            attributes: ['nome_funcionario', 'matricula'],
-            where: whereFuncionario,
+            model: Funcionario,
             required: true
         }]
     });
@@ -117,8 +105,8 @@ const getVisaoGeral = async (queryParams) => {
             data_inicio: f.data_inicio,
             data_fim: f.data_fim,
             status: f.status,
-            funcionario: f.Funcionario.nome_funcionario,
-            matricula: f.Funcionario.matricula
+            // Adiciona o objeto completo do funcionário para permitir a filtragem no frontend
+            Funcionario: f.Funcionario.toJSON() 
         });
     });
 
@@ -129,8 +117,8 @@ const getVisaoGeral = async (queryParams) => {
             data_inicio: a.data_inicio,
             data_fim: a.data_fim,
             status: a.motivo,
-            funcionario: a.Funcionario.nome_funcionario,
-            matricula: a.Funcionario.matricula
+            // Adiciona o objeto completo do funcionário
+            Funcionario: a.Funcionario.toJSON()
         });
     });
 
