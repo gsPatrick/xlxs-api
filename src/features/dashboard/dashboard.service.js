@@ -11,7 +11,6 @@ const getSummaryData = async (queryParams) => {
     const whereClauseFuncionario = { status: 'Ativo' };
     if (filters) {
         for (const key in filters) {
-            // Garante que o filtro só seja aplicado se tiver um valor
             if (filters[key] !== null && filters[key] !== undefined && filters[key] !== '') {
                 whereClauseFuncionario[key] = { [Op.iLike]: `%${filters[key]}%` };
             }
@@ -21,17 +20,28 @@ const getSummaryData = async (queryParams) => {
     // 2. SELECIONAR O PLANEJAMENTO
     let planejamentoSelecionado = null;
     if (year) {
+        // Lógica para quando um ano específico É fornecido (permanece a mesma)
         const anoNumero = parseInt(year, 10);
         planejamentoSelecionado = await Planejamento.findOne({ where: { status: 'ativo', ano: anoNumero } }) ||
                                await Planejamento.findOne({ where: { status: 'arquivado', ano: anoNumero }, order: [['criado_em', 'DESC']] });
     } else {
-        planejamentoSelecionado = await Planejamento.findOne({ where: { status: 'ativo' }, order: [['ano', 'DESC'], ['criado_em', 'DESC']] });
+        // =================================================================
+        // CORREÇÃO AQUI: Lógica para quando NENHUM ano é fornecido (carregamento inicial)
+        // Agora busca pelo planejamento de maior ano, dando preferência ao status 'ativo'.
+        // =================================================================
+        planejamentoSelecionado = await Planejamento.findOne({
+            order: [
+                ['ano', 'DESC'],      // 1º Critério: Ano mais recente primeiro (2026 virá antes de 2025)
+                ['status', 'ASC'],    // 2º Critério: Se houver 2 para o mesmo ano, 'ativo' vem antes de 'arquivado'
+                ['criado_em', 'DESC'] // 3º Critério: Desempate pela data de criação
+            ]
+        });
     }
     const anoDoPlanejamento = planejamentoSelecionado?.ano || parseInt(year, 10) || new Date().getFullYear();
 
     // 3. CALCULAR MÉTRICAS
     
-    // Total de Funcionários (OK)
+    // Total de Funcionários
     const [totalFuncionariosCount, totalFuncionariosLista] = await Promise.all([
         Funcionario.count({ where: whereClauseFuncionario }),
         Funcionario.findAll({ where: whereClauseFuncionario, attributes: ['matricula', 'nome_funcionario'], raw: true })
@@ -48,7 +58,7 @@ const getSummaryData = async (queryParams) => {
                 attributes: ['matricula', 'nome_funcionario'],
                 required: true
             }],
-            attributes: [] // Importante para não trazer dados desnecessários de Férias
+            attributes: []
         });
         const funcionariosUnicos = Array.from(new Map(feriasPlanejadas.map(f => f.Funcionario).map(func => [func.matricula, func])).values());
         planejadosResult = {
@@ -80,9 +90,6 @@ const getSummaryData = async (queryParams) => {
         const feriasDoAno = await Ferias.findAll({
             where: { planejamentoId: planejamentoSelecionado.id },
             include: [{ model: Funcionario, where: whereClauseFuncionario, attributes: [], required: true }],
-            // =================================================================
-            // CORREÇÃO AQUI: Especificamos fn('COUNT', col('Ferias.id')) para remover a ambiguidade
-            // =================================================================
             attributes: [
                 [fn('to_char', col('data_inicio'), 'MM'), 'mes'],
                 [fn('COUNT', col('Ferias.id')), 'total']
