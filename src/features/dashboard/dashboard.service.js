@@ -1,28 +1,58 @@
 // src/features/dashboard/dashboard.service.js
 const { Funcionario, Planejamento, Ferias } = require('../../models');
 const { Op, fn, col, literal } = require('sequelize');
-const { addDays, startOfYear, endOfYear } = require('date-fns');
+const { addDays } = require('date-fns');
 
-const getSummaryData = async () => {
+const getSummaryData = async (queryParams) => {
     const hoje = new Date();
-    
-    // =================================================================
-    // DADOS GERAIS (CARDS PRINCIPAIS)
-    // =================================================================
-    
-    const totalFuncionarios = await Funcionario.count({ where: { status: 'Ativo' } });
+    const { year, ...filters } = queryParams;
 
-    const planejamentoAtivo = await Planejamento.findOne({ 
-        where: { status: 'ativo' },
-        order: [['ano', 'DESC'], ['criado_em', 'DESC']] 
-    });
+    // =================================================================
+    // 1. CONSTRUIR CLÁUSULA DE FILTRO DINÂMICA PARA FUNCIONÁRIOS
+    // =================================================================
+    const whereClauseFuncionario = { status: 'Ativo' }; // Sempre buscar apenas ativos como base
+    if (filters) {
+        for (const key in filters) {
+            // Garante que o valor do filtro não seja nulo ou vazio
+            if (filters[key]) {
+                // Usamos iLike para buscas parciais e insensíveis a maiúsculas/minúsculas
+                whereClauseFuncionario[key] = { [Op.iLike]: `%${filters[key]}%` };
+            }
+        }
+    }
+
+    // =================================================================
+    // 2. SELECIONAR O PLANEJAMENTO (COM BASE APENAS NO ANO)
+    // =================================================================
+    let planejamentoSelecionado = null;
+    if (year) {
+        const anoNumero = parseInt(year, 10);
+        planejamentoSelecionado = await Planejamento.findOne({ where: { status: 'ativo', ano: anoNumero } }) ||
+                               await Planejamento.findOne({ where: { status: 'arquivado', ano: anoNumero }, order: [['criado_em', 'DESC']] });
+    } else {
+        planejamentoSelecionado = await Planejamento.findOne({ where: { status: 'ativo' }, order: [['ano', 'DESC'], ['criado_em', 'DESC']] });
+    }
+    const anoDoPlanejamento = planejamentoSelecionado?.ano || parseInt(year, 10) || new Date().getFullYear();
+
+    // =================================================================
+    // 3. CALCULAR MÉTRICAS APLICANDO OS FILTROS
+    // =================================================================
+    
+    // Cards Principais
+    const totalFuncionarios = await Funcionario.count({ where: whereClauseFuncionario });
 
     let funcionariosComFeriasPlanejadas = 0;
-    if (planejamentoAtivo) {
+    if (planejamentoSelecionado) {
         funcionariosComFeriasPlanejadas = await Ferias.count({
-            where: { planejamentoId: planejamentoAtivo.id },
             distinct: true,
-            col: 'matricula_funcionario'
+            col: 'matricula_funcionario',
+            where: { planejamentoId: planejamentoSelecionado.id },
+            include: [{
+                model: Funcionario,
+                where: whereClauseFuncionario,
+                attributes: [], // Não precisamos dos atributos do funcionário, só do filtro
+                required: true
+            }]
         });
     }
 
@@ -30,80 +60,43 @@ const getSummaryData = async () => {
         ? ((funcionariosComFeriasPlanejadas / totalFuncionarios) * 100).toFixed(1) 
         : 0;
 
-    // =================================================================
-    // ITENS DE AÇÃO (ALERTAS E PONTOS DE ATENÇÃO)
-    // =================================================================
-    
-    const feriasVencidas = await Funcionario.count({
-        where: { 
-            status: 'Ativo',
-            dth_limite_ferias: { [Op.lt]: hoje } 
-        }
-    });
+    // Itens de Ação (também usam o filtro)
+    const feriasVencidas = await Funcionario.count({ where: { ...whereClauseFuncionario, dth_limite_ferias: { [Op.lt]: hoje } } });
+    const riscoIminente = await Funcionario.count({ where: { ...whereClauseFuncionario, dth_limite_ferias: { [Op.between]: [hoje, addDays(hoje, 30)] } } });
+    const riscoMedioPrazo = await Funcionario.count({ where: { ...whereClauseFuncionario, dth_limite_ferias: { [Op.between]: [addDays(hoje, 31), addDays(hoje, 90)] } } });
 
-    const riscoIminente = await Funcionario.count({
-        where: { 
-            status: 'Ativo',
-            dth_limite_ferias: { [Op.between]: [hoje, addDays(hoje, 30)] } 
-        }
-    });
-    
-    const riscoMedioPrazo = await Funcionario.count({
-        where: {
-            status: 'Ativo',
-            dth_limite_ferias: { [Op.between]: [addDays(hoje, 31), addDays(hoje, 90)] }
-        }
-    });
-
+    // Itens de Ação para Férias (usando include para filtrar)
     const solicitacoesPendentes = await Ferias.count({
-        where: { status: 'Solicitada' }
+        where: { status: 'Solicitada' },
+        include: [{ model: Funcionario, where: whereClauseFuncionario, attributes: [], required: true }]
     });
 
     const necessidadeSubstituicao = await Ferias.count({
-        where: {
-            necessidade_substituicao: true,
-            status: { [Op.in]: ['Planejada', 'Confirmada'] },
-            data_inicio: { [Op.gte]: hoje }
-        }
+        where: { necessidade_substituicao: true, status: { [Op.in]: ['Planejada', 'Confirmada'] }, data_inicio: { [Op.gte]: hoje } },
+        include: [{ model: Funcionario, where: whereClauseFuncionario, attributes: [], required: true }]
     });
     
     let pendentesDeSubstituto = 0;
-    if (planejamentoAtivo) {
+    if (planejamentoSelecionado) {
         pendentesDeSubstituto = await Ferias.count({
-            where: {
-                planejamentoId: planejamentoAtivo.id,
-                status: { [Op.in]: ['Planejada', 'Confirmada'] },
-                data_inicio: { [Op.gte]: hoje },
-                necessidade_substituicao: true,
-                observacao: {
-                    [Op.iLike]: '%Pendente de alocação de substituto%'
-                }
-            }
+            where: { 
+                planejamentoId: planejamentoSelecionado.id, 
+                status: { [Op.in]: ['Planejada', 'Confirmada'] }, 
+                data_inicio: { [Op.gte]: hoje }, 
+                necessidade_substituicao: true, 
+                observacao: { [Op.iLike]: '%Pendente de alocação%' } 
+            },
+            include: [{ model: Funcionario, where: whereClauseFuncionario, attributes: [], required: true }]
         });
     }
 
-    // =================================================================
-    // DADOS PARA GRÁFICOS (DISTRIBUIÇÃO MENSAL)
-    // =================================================================
-
+    // Gráfico de Distribuição (também usa include para filtrar)
     let distribuicaoMensal = [];
-    if (planejamentoAtivo) {
-        // CORREÇÃO: O ano para a busca do gráfico agora vem do planejamento ativo.
-        const anoDoPlanejamento = planejamentoAtivo.ano;
-        const inicioAnoPlanejamento = new Date(anoDoPlanejamento, 0, 1);
-        const fimAnoPlanejamento = new Date(anoDoPlanejamento, 11, 31);
-
+    if (planejamentoSelecionado) {
         const feriasDoAno = await Ferias.findAll({
-            where: {
-                planejamentoId: planejamentoAtivo.id,
-                data_inicio: {
-                    [Op.between]: [inicioAnoPlanejamento, fimAnoPlanejamento]
-                }
-            },
-            attributes: [
-                [fn('to_char', col('data_inicio'), 'MM'), 'mes'],
-                [fn('count', col('id')), 'total']
-            ],
+            where: { planejamentoId: planejamentoSelecionado.id },
+            include: [{ model: Funcionario, where: whereClauseFuncionario, attributes: [], required: true }],
+            attributes: [ [fn('to_char', col('data_inicio'), 'MM'), 'mes'], [fn('count', col('Ferias.id')), 'total'] ],
             group: ['mes'],
             order: [[literal('mes'), 'ASC']],
             raw: true
@@ -113,13 +106,11 @@ const getSummaryData = async () => {
         distribuicaoMensal = mesesDoAno.map((nomeMes, index) => {
             const mesNumero = String(index + 1).padStart(2, '0');
             const mesData = feriasDoAno.find(item => item.mes === mesNumero);
-            return {
-                mes: nomeMes,
-                total: mesData ? parseInt(mesData.total, 10) : 0
-            };
+            return { mes: nomeMes, total: mesData ? parseInt(mesData.total, 10) : 0 };
         });
     }
 
+    // Montagem final do objeto de resposta
     const itensDeAcao = [
         { title: 'Férias Vencidas', count: feriasVencidas, link: '/funcionarios?filtro=vencidas', variant: 'danger' },
         { title: 'Risco Iminente (30 dias)', count: riscoIminente, link: '/funcionarios?filtro=risco_iminente', variant: 'warning' },
@@ -132,16 +123,15 @@ const getSummaryData = async () => {
         itensDeAcao.push({ 
             title: 'Pendente de Substituto', 
             count: pendentesDeSubstituto, 
-            link: '/planejamento?filtro=pendente_substituto',
+            link: `/planejamento?ano=${anoDoPlanejamento}`,
             variant: 'warning' 
         });
     }
 
-
     return {
         cardsPrincipais: {
             totalFuncionarios,
-            planejamentoAtivo: planejamentoAtivo ? `Ano ${planejamentoAtivo.ano}` : 'Nenhum',
+            planejamentoAtivo: planejamentoSelecionado ? `Ano ${planejamentoSelecionado.ano}` : 'Nenhum',
             funcionariosComFeriasPlanejadas,
             percentualPlanejado: `${percentualPlanejado}%`
         },

@@ -3,7 +3,8 @@ const dashboardService = require('./dashboard.service');
 
 const getSummary = async (req, res) => {
     try {
-        const summaryData = await dashboardService.getSummaryData();
+        // Passa todos os parâmetros da query para o serviço
+        const summaryData = await dashboardService.getSummaryData(req.query);
         res.status(200).send(summaryData);
     } catch (error) {
         console.error('Erro no controller ao buscar resumo do dashboard:', error);
