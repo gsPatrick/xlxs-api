@@ -216,12 +216,16 @@ const findAll = async (queryParams) => {
     if (queryParams.status) { whereClause.status = queryParams.status; }
     if (queryParams.municipio) { whereClause.municipio_local_trabalho = queryParams.municipio; }
     if (queryParams.grupoContrato) { whereClause.des_grupo_contrato = queryParams.grupoContrato; }
-    if (queryParams.categoria) { whereClause.categoria = queryParams.categoria; }
+    
+    if (queryParams.categoria) {
+        const categorias = Array.isArray(queryParams.categoria) ? queryParams.categoria : queryParams.categoria.split(',');
+        if (categorias.length > 0) {
+            whereClause.categoria = { [Op.in]: categorias };
+        }
+    }
+    
     if (queryParams.tipoContrato) { whereClause.categoria_trab = queryParams.tipoContrato; }
     
-    // ==========================================================
-    // ALTERADO: Adicionado novo caso para o filtro 'reprogramar'
-    // ==========================================================
     if (queryParams.filtro) {
         const hoje = new Date();
         if (queryParams.filtro === 'vencidas') { whereClause.dth_limite_ferias = { [Op.lt]: hoje }; }
@@ -229,13 +233,10 @@ const findAll = async (queryParams) => {
             const dataLimiteRisco = addDays(hoje, 30);
             whereClause.dth_limite_ferias = { [Op.between]: [hoje, dataLimiteRisco] };
         }
-        // NOVO FILTRO
         if (queryParams.filtro === 'reprogramar') {
-            // Reutiliza a lógica do serviço de alertas para encontrar os funcionários
             const funcionariosParaReprogramar = await alertasService.findNecessitaReprogramacao(queryParams);
             const matriculasReprogramar = funcionariosParaReprogramar.map(f => f.matricula);
 
-            // Se não houver ninguém para reprogramar, garante que a busca retorne vazio
             if (matriculasReprogramar.length === 0) {
                  whereClause.matricula = { [Op.in]: [] };
             } else {
@@ -310,7 +311,7 @@ const getFilterOptions = async () => {
         return {
             municipios: municipios.map(item => item.municipio_local_trabalho),
             gestoes: gestoes.map(item => item.des_grupo_contrato),
-            categorias: categorias.map(item => item.categoria),
+            categorias: categorias.map(item => item.categoria.replace(/^\d+\s*-\s*/, '').trim()),
             estados: estados.map(item => item.sigla_local),
             escalas: escalas.map(item => item.escala),
             tiposContrato: tiposContrato.map(item => item.categoria_trab),

@@ -12,7 +12,16 @@ const getSummaryData = async (queryParams) => {
     if (filters) {
         for (const key in filters) {
             if (filters[key] !== null && filters[key] !== undefined && filters[key] !== '') {
-                whereClauseFuncionario[key] = { [Op.iLike]: `%${filters[key]}%` };
+                // Lógica para Múltipla Seleção de Categoria
+                if (key === 'categoria' && Array.isArray(filters[key])) {
+                    if(filters[key].length > 0) {
+                        // Se for um array (do react-select), usa o operador [Op.in]
+                        whereClauseFuncionario[key] = { [Op.in]: filters[key] };
+                    }
+                } else {
+                    // Comportamento padrão para os outros filtros
+                    whereClauseFuncionario[key] = { [Op.iLike]: `%${filters[key]}%` };
+                }
             }
         }
     }
@@ -20,26 +29,24 @@ const getSummaryData = async (queryParams) => {
     // 2. SELECIONAR O PLANEJAMENTO
     let planejamentoSelecionado = null;
     if (year) {
-        // Lógica para quando um ano específico É fornecido (permanece a mesma)
+        // Lógica para quando um ano específico É fornecido
         const anoNumero = parseInt(year, 10);
         planejamentoSelecionado = await Planejamento.findOne({ where: { status: 'ativo', ano: anoNumero } }) ||
                                await Planejamento.findOne({ where: { status: 'arquivado', ano: anoNumero }, order: [['criado_em', 'DESC']] });
     } else {
-        // =================================================================
-        // CORREÇÃO AQUI: Lógica para quando NENHUM ano é fornecido (carregamento inicial)
-        // Agora busca pelo planejamento de maior ano, dando preferência ao status 'ativo'.
-        // =================================================================
+        // Lógica para quando NENHUM ano é fornecido (carregamento inicial)
+        // Busca pelo planejamento de maior ano, dando preferência ao status 'ativo'.
         planejamentoSelecionado = await Planejamento.findOne({
             order: [
-                ['ano', 'DESC'],      // 1º Critério: Ano mais recente primeiro (2026 virá antes de 2025)
-                ['status', 'ASC'],    // 2º Critério: Se houver 2 para o mesmo ano, 'ativo' vem antes de 'arquivado'
+                ['ano', 'DESC'],      // 1º Critério: Ano mais recente primeiro
+                ['status', 'ASC'],    // 2º Critério: 'ativo' vem antes de 'arquivado'
                 ['criado_em', 'DESC'] // 3º Critério: Desempate pela data de criação
             ]
         });
     }
     const anoDoPlanejamento = planejamentoSelecionado?.ano || parseInt(year, 10) || new Date().getFullYear();
 
-    // 3. CALCULAR MÉTRICAS
+    // 3. CALCULAR MÉTRICAS (RETORNANDO COUNT E LISTA DE FUNCIONÁRIOS)
     
     // Total de Funcionários
     const [totalFuncionariosCount, totalFuncionariosLista] = await Promise.all([
