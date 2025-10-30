@@ -207,9 +207,7 @@ async function releaseSubstitute(feriasId, transaction) {
     }
 }
 
-/**
- * Orquestra a criação de um novo planejamento de férias para um ano.
- */
+
 async function distribuirFerias(ano, descricao, options = {}) {
     const { transaction, dataInicioDist, dataFimDist } = options;
     console.log(`[LOG FÉRIAS SERVICE] Iniciando distribuição. Ano: ${ano}. Período: ${dataInicioDist || 'Padrão'} a ${dataFimDist || 'Padrão'}`);
@@ -236,15 +234,24 @@ async function distribuirFerias(ano, descricao, options = {}) {
         });
         const matriculasManuais = new Set(feriasManuais.map(f => f.matricula_funcionario));
 
+        // ==========================================================
+        // MUDANÇA PRINCIPAL AQUI: A lógica de elegibilidade foi simplificada
+        // para incluir todos os funcionários ativos que não estão em aviso prévio
+        // e não têm férias manuais já definidas.
+        // ==========================================================
         const funcionariosElegiveis = await Funcionario.findAll({
             where: {
                 status: 'Ativo',
-                dth_limite_ferias: { [Op.not]: null },
-                situacao_ferias_afastamento_hoje: { [Op.or]: [ { [Op.is]: null }, { [Op.notILike]: '%aviso prévio%' } ] },
+                situacao_ferias_afastamento_hoje: {
+                    [Op.or]: [
+                        { [Op.is]: null },
+                        { [Op.notILike]: '%aviso prévio%' }
+                    ]
+                },
                 matricula: { [Op.notIn]: Array.from(matriculasManuais) }
             },
             include: ['historicoFerias'],
-            order: [['dth_limite_ferias', 'ASC']],
+            order: [['dth_limite_ferias', 'ASC']], // A ordem ainda prioriza quem tem vencimento mais próximo
             ...transactionOptions
         });
         
@@ -259,73 +266,64 @@ async function distribuirFerias(ano, descricao, options = {}) {
         const LIMITE_POR_MUNICIPIO_MES = 500;
 
         for (const funcionario of funcionariosElegiveis) {
-            const diasJaGozados = (funcionario.historicoFerias || [])
-                .filter(f => new Date(f.periodo_aquisitivo_inicio).getTime() === new Date(funcionario.periodo_aquisitivo_atual_inicio).getTime())
+            // Recalcula o período e o saldo DESTE funcionário para garantir que está atualizado
+            const funcionarioAtualizado = await recalcularPeriodoAquisitivo(funcionario.matricula);
+
+            const diasJaGozados = (funcionarioAtualizado.historicoFerias || [])
+                .filter(f => new Date(f.periodo_aquisitivo_inicio).getTime() === new Date(funcionarioAtualizado.periodo_aquisitivo_atual_inicio).getTime())
                 .reduce((acc, f) => acc + f.qtd_dias, 0);
 
-            const diasDeFerias = funcionario.saldo_dias_ferias - diasJaGozados;
+            const diasDeFerias = funcionarioAtualizado.saldo_dias_ferias - diasJaGozados;
             
             if (diasDeFerias <= 0) {
-                console.log(`[INFO] Funcionário ${funcionario.matricula} já gozou todas as férias do período. Pulando.`);
+                console.log(`[INFO] Funcionário ${funcionarioAtualizado.matricula} já gozou todas as férias do período. Pulando.`);
                 continue;
             }
 
             let dataInicioEncontrada = false;
             
-            const hoje = startOfDay(new Date());
-            const inicioPeriodoAquisitivo = startOfDay(new Date(funcionario.periodo_aquisitivo_atual_inicio));
-            
-            let dataDePartida = hoje > inicioPeriodoAquisitivo ? hoje : inicioPeriodoAquisitivo;
+            let dataDePartida = startOfDay(new Date());
 
             if (dataInicioDist && isValid(parseISO(dataInicioDist))) {
-                const dataInicioUsuario = startOfDay(parseISO(dataInicioDist));
-                dataDePartida = dataInicioUsuario > dataDePartida ? dataInicioUsuario : dataDePartida;
+                dataDePartida = startOfDay(parseISO(dataInicioDist));
             }
 
-            const dataLimiteFuncionario = startOfDay(new Date(funcionario.dth_limite_ferias));
-            let dataLimiteBusca = dataLimiteFuncionario;
+            // Garante que a data de partida não seja antes do início do período aquisitivo
+            const inicioPeriodoAquisitivo = startOfDay(new Date(funcionarioAtualizado.periodo_aquisitivo_atual_inicio));
+            if(dataDePartida < inicioPeriodoAquisitivo) {
+                dataDePartida = inicioPeriodoAquisitivo;
+            }
+            
+            let dataLimiteBusca = startOfDay(new Date(funcionarioAtualizado.dth_limite_ferias));
             if (dataFimDist && isValid(parseISO(dataFimDist))) {
                 const dataFimUsuario = startOfDay(parseISO(dataFimDist));
-                dataLimiteBusca = dataFimUsuario < dataLimiteFuncionario ? dataFimUsuario : dataLimiteFuncionario;
+                // A data limite será a menor entre a data do usuário e a data limite do funcionário
+                dataLimiteBusca = dataFimUsuario < dataLimiteBusca ? dataFimUsuario : dataLimiteBusca;
             }
 
             let dataAtual = dataDePartida;
-
             while (!dataInicioEncontrada && dataAtual < dataLimiteBusca) {
+                // ... (lógica de busca de data, sem alterações)
                 const dataAtualFormatada = format(dataAtual, 'yyyy-MM-dd');
-
-                if (isDataValidaInicio(dataAtualFormatada, funcionario, feriadosDoAno)) {
+                if (isDataValidaInicio(dataAtualFormatada, funcionarioAtualizado, feriadosDoAno)) {
                     const mes = dataAtual.toLocaleString('pt-BR', { month: 'long' });
-                    const municipio = funcionario.municipio_local_trabalho || 'N/A';
+                    const municipio = funcionarioAtualizado.municipio_local_trabalho || 'N/A';
                     const chaveOcupacao = `${municipio}-${mes}`;
-                    
                     if (!calendarioOcupacao[chaveOcupacao]) calendarioOcupacao[chaveOcupacao] = 0;
-
                     if (calendarioOcupacao[chaveOcupacao] < LIMITE_POR_MUNICIPIO_MES) {
                         const dataFim = addDays(dataAtual, diasDeFerias - 1);
-                        if (dataFim > dataLimiteBusca) {
-                             dataAtual = addDays(dataAtual, 1);
-                             continue;
-                        }
-
-                        let observacao = null;
-                        let substituto_id = null;
-                        
-                        const substitutoAlocado = await findAndAllocateSubstitute(funcionario, dataAtual, dataFim, t);
-                        if (substitutoAlocado) {
-                            substituto_id = substitutoAlocado.id;
-                        } else {
-                            observacao = 'Pendente de alocação de substituto.';
-                        }
-
+                        if (dataFim > dataLimiteBusca) { dataAtual = addDays(dataAtual, 1); continue; }
+                        let observacao = null, substituto_id = null;
+                        const substitutoAlocado = await findAndAllocateSubstitute(funcionarioAtualizado, dataAtual, dataFim, t);
+                        if (substitutoAlocado) { substituto_id = substitutoAlocado.id; } else { observacao = 'Pendente de alocação de substituto.'; }
                         feriasParaCriar.push({
-                            matricula_funcionario: funcionario.matricula,
+                            matricula_funcionario: funcionarioAtualizado.matricula,
                             planejamentoId: novoPlanejamento.id,
                             data_inicio: dataAtualFormatada,
                             data_fim: format(dataFim, 'yyyy-MM-dd'),
                             qtd_dias: diasDeFerias,
-                            periodo_aquisitivo_inicio: funcionario.periodo_aquisitivo_atual_inicio,
-                            periodo_aquisitivo_fim: funcionario.periodo_aquisitivo_atual_fim,
+                            periodo_aquisitivo_inicio: funcionarioAtualizado.periodo_aquisitivo_atual_inicio,
+                            periodo_aquisitivo_fim: funcionarioAtualizado.periodo_aquisitivo_atual_fim,
                             status: 'Planejada',
                             ajuste_manual: false,
                             necessidade_substituicao: true,
@@ -340,7 +338,7 @@ async function distribuirFerias(ano, descricao, options = {}) {
             }
 
             if (!dataInicioEncontrada) {
-                console.warn(`[AVISO] Não foi possível encontrar uma data válida para o funcionário ${funcionario.matricula} dentro do período e regras.`);
+                console.warn(`[AVISO] Não foi possível encontrar uma data válida para o funcionário ${funcionarioAtualizado.matricula} dentro do período e regras.`);
             }
         }
 
@@ -350,10 +348,7 @@ async function distribuirFerias(ano, descricao, options = {}) {
         
         if (feriasManuais.length > 0) {
             const idsFeriasManuais = feriasManuais.map(f => f.id);
-            await Ferias.update(
-                { planejamentoId: novoPlanejamento.id },
-                { where: { id: { [Op.in]: idsFeriasManuais } }, ...transactionOptions }
-            );
+            await Ferias.update({ planejamentoId: novoPlanejamento.id }, { where: { id: { [Op.in]: idsFeriasManuais } }, ...transactionOptions });
         }
         
         if (!transaction) await t.commit();
