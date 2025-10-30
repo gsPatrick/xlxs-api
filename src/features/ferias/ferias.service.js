@@ -3,8 +3,7 @@
 const { Op, fn, col, literal } = require('sequelize');
 const axios = require('axios');
 const { Ferias, Funcionario, Planejamento, Afastamento, Substituto, sequelize } = require('../../models');
-const { addYears, addMonths, addDays, differenceInDays, isWithinInterval, getDay, format, getYear, parseISO, startOfDay, isValid } = require('date-fns');
-
+const { addYears, addMonths, addDays, differenceInDays, isWithinInterval, getDay, format, getYear, parseISO, startOfDay, isValid, getMonth, setMonth } = require('date-fns');
 /**
  * Busca os feriados nacionais de um determinado ano usando a BrasilAPI.
  */
