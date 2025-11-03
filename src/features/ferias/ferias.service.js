@@ -165,7 +165,7 @@ async function tentarAlocarFerias(dataAtual, dataLimite, diasDeFerias, funcionar
 
 async function distribuirFerias(ano, descricao, options = {}) {
     const { transaction, dataInicioDist, dataFimDist } = options;
-    console.log(`[LOG] EXECUTANDO DISTRIBUIÇÃO INDEPENDENTE (V-FINAL) PARA ANO: ${ano}.`);
+    console.log(`[LOG] INICIANDO DISTRIBUIÇÃO BLINDADA (V6) PARA O ANO: ${ano}.`);
     
     const t = transaction || await sequelize.transaction();
     const transactionOptions = { transaction: t };
@@ -177,17 +177,22 @@ async function distribuirFerias(ano, descricao, options = {}) {
         const feriasManuais = await Ferias.findAll({ where: { ajuste_manual: true, status: { [Op.in]: ['Confirmada', 'Planejada'] } }, ...transactionOptions });
         const matriculasManuais = new Set(feriasManuais.map(f => f.matricula_funcionario));
 
-        const inicioDistribuicao = dataInicioDist ? startOfDay(parseISO(dataInicioDist)) : startOfYear(new Date(ano, 0, 1));
-        const fimDistribuicao = dataFimDist ? endOfDay(parseISO(dataFimDist)) : endOfYear(new Date(ano, 11, 31));
-        
+        // FORÇA O PERÍODO DE DISTRIBUIÇÃO A FICAR ESTRITAMENTE DENTRO DO ANO DO PLANEJAMENTO
+        const inicioDoAno = startOfYear(new Date(ano, 0, 1));
+        const fimDoAno = endOfYear(new Date(ano, 11, 31));
+
+        const inicioDistribuicao = dataInicioDist ? startOfDay(parseISO(dataInicioDist)) : inicioDoAno;
+        const fimDistribuicao = dataFimDist ? endOfDay(parseISO(dataFimDist)) : fimDoAno;
         console.log(`[INFO] Período de distribuição: ${format(inicioDistribuicao, 'dd/MM/yyyy')} a ${format(fimDistribuicao, 'dd/MM/yyyy')}.`);
 
+        // PASSO 1: QUERY DE EXCLUSÃO DE AFASTADOS MAIS EXPLÍCITA
         const afastamentosConflitantes = await Afastamento.findAll({
             attributes: ['matricula_funcionario'],
             where: {
-                [Op.and]: [
-                    { data_inicio: { [Op.lte]: fimDistribuicao } },
-                    { [Op.or]: [{ data_fim: { [Op.gte]: inicioDistribuicao } }, { data_fim: { [Op.is]: null } }] }
+                data_inicio: { [Op.lte]: fimDistribuicao },
+                [Op.or]: [
+                    { data_fim: { [Op.gte]: inicioDistribuicao } },
+                    { data_fim: { [Op.is]: null } }
                 ]
             },
             raw: true, transaction: t
@@ -195,10 +200,10 @@ async function distribuirFerias(ano, descricao, options = {}) {
         const matriculasParaExcluir = new Set(afastamentosConflitantes.map(af => af.matricula_funcionario));
         console.log(`[INFO] ${matriculasParaExcluir.size} funcionários inelegíveis por afastamento.`);
 
+        // PASSO 2: Buscar funcionários elegíveis
         const funcionariosElegiveis = await Funcionario.findAll({
             where: {
                 status: 'Ativo',
-                situacao_ferias_afastamento_hoje: { [Op.or]: [{ [Op.is]: null }, { [Op.notILike]: '%aviso prévio%' }] },
                 matricula: { 
                     [Op.notIn]: Array.from(matriculasManuais),
                     [Op.notIn]: Array.from(matriculasParaExcluir)
@@ -211,20 +216,21 @@ async function distribuirFerias(ano, descricao, options = {}) {
         
         console.log(`[LOG] ${funcionariosElegiveis.length} funcionários elegíveis serão planejados.`);
         if (funcionariosElegiveis.length === 0 && feriasManuais.length === 0) {
-            if (!transaction) await t.commit();
-            return { message: `Planejamento para ${ano} criado, mas nenhum funcionário era elegível.` };
+            if (!transaction) await t.commit(); return { message: `Planejamento para ${ano} criado, mas nenhum funcionário era elegível.` };
         }
 
         const feriadosDoAno = await getFeriadosNacionais(ano);
         const feriasParaCriar = [];
         let funcionariosNaoAlocados = 0;
         
+        // Estrutura para controle de ocupação
         const ocupacaoMensal = {};
+        const limiteAlocacaoGlobal = Math.ceil(funcionariosElegiveis.length / 11) + 5; // Adiciona uma pequena folga
 
         for (const funcionario of funcionariosElegiveis) {
             const funcionarioAtualizado = await recalcularPeriodoAquisitivo(funcionario.matricula);
             const diasJaGozados = (funcionarioAtualizado.historicoFerias || [])
-                .filter(f => new Date(f.periodo_aquisitivo_inicio).getTime() === new Date(funcionarioAtualizado.periodo_aquisitivo_atual_inicio).getTime())
+                .filter(f => f.periodo_aquisitivo_inicio && new Date(f.periodo_aquisitivo_inicio).getTime() === new Date(funcionarioAtualizado.periodo_aquisitivo_atual_inicio).getTime())
                 .reduce((acc, f) => acc + f.qtd_dias, 0);
             
             const diasDeFerias = funcionarioAtualizado.saldo_dias_ferias - diasJaGozados;
@@ -232,41 +238,37 @@ async function distribuirFerias(ano, descricao, options = {}) {
 
             let dataInicioEncontrada = false;
             const dataLimiteFuncionario = startOfDay(new Date(funcionarioAtualizado.dth_limite_ferias));
-            const municipio = funcionarioAtualizado.municipio_local_trabalho || 'N/A';
             
-            for (let mes = getMonth(inicioDistribuicao); mes <= getMonth(fimDistribuicao); mes++) {
-                let diaDeBusca = startOfDay(new Date(ano, mes, 1));
-                if (mes === getMonth(inicioDistribuicao) && diaDeBusca < inicioDistribuicao) {
-                    diaDeBusca = inicioDistribuicao;
-                }
-                
-                while (getMonth(diaDeBusca) === mes && diaDeBusca < fimDistribuicao) {
-                    const dataFimFerias = addDays(diaDeBusca, diasDeFerias - 1);
+            // PASSO 3: GARANTIR QUE A BUSCA COMECE DENTRO DO ANO DO PLANEJAMENTO
+            let diaDeBusca = inicioDistribuicao > new Date() ? inicioDistribuicao : new Date(); // Começa a busca a partir de hoje ou do início da distribuição
+            if (getYear(diaDeBusca) < ano) {
+                diaDeBusca = inicioDoAno; // Força o início da busca para o ano do planejamento se a data atual for anterior
+            }
 
-                    if (dataFimFerias < dataLimiteFuncionario && isDataValidaInicio(format(diaDeBusca, 'yyyy-MM-dd'), funcionarioAtualizado, feriadosDoAno)) {
+            while (diaDeBusca < dataLimiteFuncionario && diaDeBusca < fimDistribuicao) {
+                const dataFimFerias = addDays(diaDeBusca, diasDeFerias - 1);
+
+                if (isDataValidaInicio(format(diaDeBusca, 'yyyy-MM-dd'), funcionarioAtualizado, feriadosDoAno)) {
+                    const mes = getMonth(diaDeBusca);
+                    const chaveOcupacao = `${funcionario.municipio_local_trabalho || 'N/A'}-${mes}`;
+                    
+                    if ((ocupacaoMensal[chaveOcupacao] || 0) < limiteAlocacaoGlobal) {
+                        feriasParaCriar.push({
+                            matricula_funcionario: funcionarioAtualizado.matricula, planejamentoId: novoPlanejamento.id,
+                            data_inicio: format(diaDeBusca, 'yyyy-MM-dd'), data_fim: format(dataFimFerias, 'yyyy-MM-dd'),
+                            qtd_dias: diasDeFerias,
+                            periodo_aquisitivo_inicio: funcionarioAtualizado.periodo_aquisitivo_atual_inicio,
+                            periodo_aquisitivo_fim: funcionarioAtualizado.periodo_aquisitivo_atual_fim,
+                            status: 'Planejada', ajuste_manual: false,
+                            necessidade_substituicao: true, observacao: null
+                        });
                         
-                        const chaveOcupacao = `${municipio}-${mes}`;
-                        const limiteAlocacao = Math.ceil(funcionariosElegiveis.length / 11) + 5; // Adiciona uma pequena folga
-                        
-                        if ((ocupacaoMensal[chaveOcupacao] || 0) < limiteAlocacao) {
-                            feriasParaCriar.push({
-                                matricula_funcionario: funcionarioAtualizado.matricula, planejamentoId: novoPlanejamento.id,
-                                data_inicio: format(diaDeBusca, 'yyyy-MM-dd'), data_fim: format(dataFimFerias, 'yyyy-MM-dd'),
-                                qtd_dias: diasDeFerias,
-                                periodo_aquisitivo_inicio: funcionarioAtualizado.periodo_aquisitivo_atual_inicio,
-                                periodo_aquisitivo_fim: funcionarioAtualizado.periodo_aquisitivo_atual_fim,
-                                status: 'Planejada', ajuste_manual: false,
-                                necessidade_substituicao: true, observacao: null
-                            });
-                            
-                            ocupacaoMensal[chaveOcupacao] = (ocupacaoMensal[chaveOcupacao] || 0) + 1;
-                            dataInicioEncontrada = true;
-                            break;
-                        }
+                        ocupacaoMensal[chaveOcupacao] = (ocupacaoMensal[chaveOcupacao] || 0) + 1;
+                        dataInicioEncontrada = true;
+                        break;
                     }
-                    diaDeBusca = addDays(diaDeBusca, 1);
                 }
-                if (dataInicioEncontrada) break;
+                diaDeBusca = addDays(diaDeBusca, 1);
             }
 
             if (!dataInicioEncontrada) {
@@ -279,8 +281,7 @@ async function distribuirFerias(ano, descricao, options = {}) {
         if (feriasParaCriar.length > 0) await Ferias.bulkCreate(feriasParaCriar, transactionOptions);
         if (feriasManuais.length > 0) await Ferias.update({ planejamentoId: novoPlanejamento.id }, { where: { id: { [Op.in]: feriasManuais.map(f => f.id) } }, ...transactionOptions });
         if (!transaction) await t.commit();
-        console.log(`[LOG] DISTRIBUIÇÃO CONCLUÍDA. ${feriasParaCriar.length} períodos planejados.`);
-        return { message: `Distribuição para ${ano} concluída. ${feriasParaCriar.length} períodos planejados.`, registrosCriados: feriasParaCriar.length };
+        return { message: `Distribuição concluída. ${feriasParaCriar.length} períodos planejados.`, registrosCriados: feriasParaCriar.length };
 
     } catch(error) {
         if (!transaction) await t.rollback();
