@@ -311,7 +311,7 @@ const getFilterOptions = async () => {
         return {
             municipios: municipios.map(item => item.municipio_local_trabalho),
             gestoes: gestoes.map(item => item.des_grupo_contrato),
-            categorias: categorias.map(item => item.categoria.replace(/^\d+\s*-\s*/, '').trim()),
+            categorias: categorias.map(item => item.categoria.replace(/^\d+\s*-\s*/, '').trim()).sort((a, b) => a.localeCompare(b)),
             estados: estados.map(item => item.sigla_local),
             escalas: escalas.map(item => item.escala),
             tiposContrato: tiposContrato.map(item => item.categoria_trab),

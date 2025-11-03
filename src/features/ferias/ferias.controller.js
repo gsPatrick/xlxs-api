@@ -77,6 +77,16 @@ const bulkRemove = async (req, res) => {
     }
 };
 
+const bulkUpdateSubstitution = async (req, res) => {
+    try {
+        const { ids, necessidade_substituicao } = req.body;
+        const result = await feriasService.bulkUpdateSubstitution(ids, necessidade_substituicao);
+        res.status(200).send(result);
+    } catch (error) {
+        res.status(500).send({ message: 'Falha ao atualizar substituição em massa.', error: error.message });
+    }
+};
+
 module.exports = { 
     findAllPaginated,
     distribuir,
@@ -84,5 +94,6 @@ module.exports = {
     create,
     update,
     remove,
-    bulkRemove
+    bulkRemove,
+    bulkUpdateSubstitution
 };

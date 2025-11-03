@@ -25,5 +25,6 @@ router.delete('/bulk', feriasController.bulkRemove);
 router.post('/', feriasController.create);
 router.put('/:id', feriasController.update);
 router.delete('/:id', feriasController.remove);
+router.put('/bulk-update-substitution', feriasController.bulkUpdateSubstitution);
 
 module.exports = router;

@@ -8,23 +8,20 @@ const getSummaryData = async (queryParams) => {
     const { year, ...filters } = queryParams;
 
     // 1. CONSTRUIR CLÁUSULA DE FILTRO DINÂMICA PARA FUNCIONÁRIOS
-    const whereClauseFuncionario = { status: 'Ativo' };
-    if (filters) {
-        for (const key in filters) {
-            if (filters[key] !== null && filters[key] !== undefined && filters[key] !== '') {
+const whereClauseFuncionario = { status: 'Ativo' };
+if (filters) {
+    for (const key in filters) {
+        if (filters[key] !== null && filters[key] !== undefined && filters[key] !== '' && filters[key].length > 0) {
+            if (key === 'categoria' && Array.isArray(filters[key])) {
                 // Lógica para Múltipla Seleção de Categoria
-                if (key === 'categoria' && Array.isArray(filters[key])) {
-                    if(filters[key].length > 0) {
-                        // Se for um array (do react-select), usa o operador [Op.in]
-                        whereClauseFuncionario[key] = { [Op.in]: filters[key] };
-                    }
-                } else {
-                    // Comportamento padrão para os outros filtros
-                    whereClauseFuncionario[key] = { [Op.iLike]: `%${filters[key]}%` };
-                }
+                whereClauseFuncionario[key] = { [Op.in]: filters[key] };
+            } else if (['sigla_local', 'contrato', 'cliente', 'des_grupo_contrato', 'municipio_local_trabalho'].includes(key)) {
+                // Lógica para os novos filtros
+                whereClauseFuncionario[key] = { [Op.iLike]: `%${filters[key]}%` };
             }
         }
     }
+}
 
     // 2. SELECIONAR O PLANEJAMENTO
     let planejamentoSelecionado = null;
