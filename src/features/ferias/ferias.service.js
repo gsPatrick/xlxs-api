@@ -164,7 +164,7 @@ async function tentarAlocarFerias(dataAtual, dataLimite, diasDeFerias, funcionar
 
 async function distribuirFerias(ano, descricao, options = {}) {
     const { transaction } = options;
-    console.log(`[LOG] INICIANDO DISTRIBUIÇÃO BALANCEADA (V2) PARA O ANO: ${ano}.`);
+    console.log(`[LOG] INICIANDO DISTRIBUIÇÃO SIMPLIFICADA (V3) PARA O ANO: ${ano}.`);
     
     const t = transaction || await sequelize.transaction();
     const transactionOptions = { transaction: t };
@@ -179,38 +179,32 @@ async function distribuirFerias(ano, descricao, options = {}) {
         const inicioAno = startOfYear(new Date(ano, 0, 1));
         const fimAno = endOfYear(new Date(ano, 11, 31));
 
-        // PASSO 1: Identificar e coletar as matrículas de TODOS os funcionários que devem ser EXCLUÍDOS.
+        // PASSO 1: Excluir funcionários com afastamentos conflitantes
         const afastamentosConflitantes = await Afastamento.findAll({
             attributes: ['matricula_funcionario'],
             where: {
                 [Op.and]: [
-                    { data_inicio: { [Op.lte]: fimAno } }, // O afastamento começa antes do fim do ano de planejamento
-                    {
-                        [Op.or]: [
-                            { data_fim: { [Op.gte]: inicioAno } }, // O afastamento termina depois do início do ano
-                            { data_fim: { [Op.is]: null } }        // Ou o afastamento está em aberto
-                        ]
-                    }
+                    { data_inicio: { [Op.lte]: fimAno } },
+                    { [Op.or]: [{ data_fim: { [Op.gte]: inicioAno } }, { data_fim: { [Op.is]: null } }] }
                 ]
             },
-            raw: true,
-            ...transactionOptions
+            raw: true, ...transactionOptions
         });
         const matriculasParaExcluir = new Set(afastamentosConflitantes.map(af => af.matricula_funcionario));
-        console.log(`[INFO] ${matriculasParaExcluir.size} funcionários serão excluídos da distribuição devido a afastamentos.`);
+        console.log(`[INFO] ${matriculasParaExcluir.size} funcionários serão excluídos devido a afastamentos.`);
 
-        // PASSO 2: Buscar apenas os funcionários ELEGÍVEIS, excluindo a lista de inelegíveis e outras condições.
+        // PASSO 2: Buscar apenas funcionários elegíveis
         const funcionariosElegiveis = await Funcionario.findAll({
             where: {
                 status: 'Ativo',
                 situacao_ferias_afastamento_hoje: { [Op.or]: [{ [Op.is]: null }, { [Op.notILike]: '%aviso prévio%' }] },
                 matricula: { 
                     [Op.notIn]: Array.from(matriculasManuais),
-                    [Op.notIn]: Array.from(matriculasParaExcluir) // Exclusão direta no BD
+                    [Op.notIn]: Array.from(matriculasParaExcluir)
                 }
             },
             include: [{ model: Ferias, as: 'historicoFerias', required: false }],
-            order: [['dth_limite_ferias', 'ASC']],
+            order: [['dth_limite_ferias', 'ASC']], // Mantém a prioridade
             ...transactionOptions
         });
         
@@ -222,19 +216,11 @@ async function distribuirFerias(ano, descricao, options = {}) {
 
         const feriadosDoAno = await getFeriadosNacionais(ano);
         const feriasParaCriar = [];
-        const calendarioOcupacao = {};
         let funcionariosNaoAlocados = 0;
         
-        const totalPorMunicipio = funcionariosElegiveis.reduce((acc, f) => {
-            const municipio = f.municipio_local_trabalho || 'N/A';
-            acc[municipio] = (acc[municipio] || 0) + 1;
-            return acc;
-        }, {});
-        
-        const limitesMensais = {};
-        for (const municipio in totalPorMunicipio) {
-            limitesMensais[municipio] = Math.ceil((totalPorMunicipio[municipio] / 10) * 1.2); // Dividindo por 10 para deixar nov/dez como folga
-        }
+        // **LÓGICA SIMPLIFICADA SEM LIMITE MENSAL**
+        // Mantém um contador simples para distribuir sequencialmente
+        let dataCorrente = inicioAno;
 
         for (const funcionario of funcionariosElegiveis) {
             const funcionarioAtualizado = await recalcularPeriodoAquisitivo(funcionario.matricula);
@@ -248,41 +234,36 @@ async function distribuirFerias(ano, descricao, options = {}) {
 
             let dataInicioEncontrada = false;
             const dataLimiteFuncionario = startOfDay(new Date(funcionarioAtualizado.dth_limite_ferias));
-            const municipio = funcionarioAtualizado.municipio_local_trabalho || 'N/A';
-            const limite = limitesMensais[municipio] || 1;
+            
+            // Procura a próxima data válida a partir da 'dataCorrente'
+            let diaDeBusca = dataCorrente;
 
-            for (let mes = 0; mes < 12; mes++) {
-                const chaveOcupacao = `${municipio}-${mes}`;
-                calendarioOcupacao[chaveOcupacao] = calendarioOcupacao[chaveOcupacao] || 0;
+            while (diaDeBusca < fimAno) {
+                const dataFimFerias = addDays(diaDeBusca, diasDeFerias - 1);
 
-                if (calendarioOcupacao[chaveOcupacao] < limite) {
-                    let diaAtual = startOfDay(new Date(ano, mes, 1));
-                    while (getMonth(diaAtual) === mes) {
-                        const dataFimFerias = addDays(diaAtual, diasDeFerias - 1);
-                        if (dataFimFerias < dataLimiteFuncionario && isDataValidaInicio(format(diaAtual, 'yyyy-MM-dd'), funcionarioAtualizado, feriadosDoAno)) {
-                            feriasParaCriar.push({
-                                matricula_funcionario: funcionarioAtualizado.matricula, planejamentoId: novoPlanejamento.id,
-                                data_inicio: format(diaAtual, 'yyyy-MM-dd'), data_fim: format(dataFimFerias, 'yyyy-MM-dd'),
-                                qtd_dias: diasDeFerias,
-                                periodo_aquisitivo_inicio: funcionarioAtualizado.periodo_aquisitivo_atual_inicio,
-                                periodo_aquisitivo_fim: funcionarioAtualizado.periodo_aquisitivo_atual_fim,
-                                status: 'Planejada', ajuste_manual: false,
-                                necessidade_substituicao: true,
-                                observacao: null
-                            });
-                            calendarioOcupacao[chaveOcupacao]++;
-                            dataInicioEncontrada = true;
-                            break;
-                        }
-                        diaAtual = addDays(diaAtual, 1);
-                    }
+                // A data de fim das férias TEM que ser ANTES da data limite E DENTRO DO ANO DO PLANEJAMENTO
+                if (dataFimFerias < dataLimiteFuncionario && getYear(dataFimFerias) === ano && isDataValidaInicio(format(diaDeBusca, 'yyyy-MM-dd'), funcionarioAtualizado, feriadosDoAno)) {
+                    feriasParaCriar.push({
+                        matricula_funcionario: funcionarioAtualizado.matricula, planejamentoId: novoPlanejamento.id,
+                        data_inicio: format(diaDeBusca, 'yyyy-MM-dd'), data_fim: format(dataFimFerias, 'yyyy-MM-dd'),
+                        qtd_dias: diasDeFerias,
+                        periodo_aquisitivo_inicio: funcionarioAtualizado.periodo_aquisitivo_atual_inicio,
+                        periodo_aquisitivo_fim: funcionarioAtualizado.periodo_aquisitivo_atual_fim,
+                        status: 'Planejada', ajuste_manual: false,
+                        necessidade_substituicao: true, observacao: null
+                    });
+                    
+                    // Avança a data corrente para a próxima alocação, para evitar sobreposição
+                    dataCorrente = addDays(diaDeBusca, 1);
+                    dataInicioEncontrada = true;
+                    break;
                 }
-                if (dataInicioEncontrada) break;
+                diaDeBusca = addDays(diaDeBusca, 1);
             }
 
             if (!dataInicioEncontrada) {
                 funcionariosNaoAlocados++;
-                console.warn(`[AVISO] Não foi possível alocar o funcionário ${funcionarioAtualizado.matricula} dentro da data limite.`);
+                console.warn(`[AVISO] Não foi possível alocar o funcionário ${funcionarioAtualizado.matricula} dentro da data limite para o ano de ${ano}.`);
             }
         }
         
@@ -302,6 +283,7 @@ async function distribuirFerias(ano, descricao, options = {}) {
         throw error;
     }
 }
+
 
 
 /**
