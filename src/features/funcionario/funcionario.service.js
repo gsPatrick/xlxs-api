@@ -51,11 +51,11 @@ const columnMapping = {
 };
 
 
-const importFromXLSX = async (filePath, options = {}) => {
-    const { data_inicio_distribuicao, data_fim_distribuicao } = options;
-    console.log(`[LOG FUNCIONARIO SERVICE] Iniciando processo de importação para: ${filePath}`);
-    const t = await sequelize.transaction();
+// Em: src/features/funcionario/funcionario.service.js
 
+const importFromXLSX = async (filePath, options = {}) => {
+    // A função agora APENAS importa os dados, sem chamar a distribuição.
+    const t = await sequelize.transaction();
     try {
         const workbook = XLSX.readFile(filePath);
         const sheetName = workbook.SheetNames[0];
@@ -113,12 +113,8 @@ const importFromXLSX = async (filePath, options = {}) => {
             else if (faltas >= 24 && faltas <= 32) funcionarioMapeado.saldo_dias_ferias = 12;
             else funcionarioMapeado.saldo_dias_ferias = 0;
 
-            // ==========================================================
-            // LÓGICA DE DETECÇÃO DE AFASTAMENTO MELHORADA
-            // ==========================================================
             const situacao = funcionarioMapeado.situacao_ferias_afastamento_hoje;
             if (situacao && (situacao.toLowerCase().includes('afastamento') || situacao.toLowerCase().includes('aposentadoria'))) {
-                // Tenta extrair datas no formato DD/MM/YYYY a DD/MM/YYYY
                 const regex = /(\d{2}\/\d{2}\/\d{4})\s*a\s*(\d{2}\/\d{2}\/\d{4})/;
                 const match = situacao.match(regex);
                 if (match && match[1] && match[2]) {
@@ -129,15 +125,14 @@ const importFromXLSX = async (filePath, options = {}) => {
                         console.log(`[INFO] Afastamento detectado para Matrícula ${funcionarioMapeado.matricula}: ${match[1]} a ${match[2]}`);
                         afastamentosParaCriar.push({
                             matricula_funcionario: String(funcionarioMapeado.matricula),
-                            motivo: situacao.substring(0, 255), // Pega a descrição completa
+                            motivo: situacao.substring(0, 255),
                             data_inicio: dataInicio,
                             data_fim: dataFim,
-                            impacta_ferias: true // Assume que todo afastamento importado impacta
+                            impacta_ferias: true
                         });
                     }
                 }
             }
-            // ==========================================================
 
             funcionarioMapeado.status = 'Ativo';
             funcionariosParaProcessar.push(funcionarioMapeado);
@@ -147,7 +142,7 @@ const importFromXLSX = async (filePath, options = {}) => {
         console.log(`[LOG FUNCIONARIO SERVICE] Processamento concluído. ${funcionariosParaProcessar.length} registros válidos. ${linhasInvalidas} linhas inválidas puladas.`);
 
         if (funcionariosParaProcessar.length === 0) {
-            throw new Error(`Nenhum registro válido foi encontrado. Verifique os cabeçalhos 'Matricula' e 'DthAdmissao'.`);
+            throw new Error(`Nenhum registro válido foi encontrado.`);
         }
         
         await Funcionario.bulkCreate(funcionariosParaProcessar, {
@@ -157,14 +152,11 @@ const importFromXLSX = async (filePath, options = {}) => {
         
         console.log(`[LOG FUNCIONARIO SERVICE] ${funcionariosParaProcessar.length} funcionários criados ou atualizados.`);
         
-        // DELETA AFASTAMENTOS ANTIGOS ANTES DE INSERIR OS NOVOS PARA EVITAR DUPLICIDADE
         if (afastamentosParaCriar.length > 0) {
             const matriculasComAfastamento = [...new Set(afastamentosParaCriar.map(a => a.matricula_funcionario))];
             await Afastamento.destroy({ where: { matricula_funcionario: { [Op.in]: matriculasComAfastamento } }, transaction: t });
             
-            await Afastamento.bulkCreate(afastamentosParaCriar, {
-                transaction: t,
-            });
+            await Afastamento.bulkCreate(afastamentosParaCriar, { transaction: t });
             console.log(`[LOG FUNCIONARIO SERVICE] ${afastamentosParaCriar.length} afastamentos criados ou atualizados.`);
         }
 
@@ -182,27 +174,15 @@ const importFromXLSX = async (filePath, options = {}) => {
             desativados = updateCount;
             console.log(`[LOG FUNCIONARIO SERVICE] ${desativados} funcionários foram desativados.`);
         }
-        
-        const anoParaDistribuicao = data_inicio_distribuicao && isValid(parseISO(data_inicio_distribuicao)) 
-            ? getYear(parseISO(data_inicio_distribuicao)) 
-            : new Date().getFullYear();
-        
-        // Chamar a distribuição de férias aqui é opcional. O ideal é fazer separado.
-        // Se for manter, ela vai rodar a lógica correta agora.
-        await feriasService.distribuirFerias(anoParaDistribuicao, `Planejamento gerado após importação`, {
-            transaction: t,
-            dataInicioDist: data_inicio_distribuicao,
-            dataFimDist: data_fim_distribuicao
-        });
 
         await t.commit();
         
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-        return { message: `Importação concluída! ${funcionariosParaProcessar.length} funcionários processados. ${desativados} desativados. ${afastamentosParaCriar.length} afastamentos registrados. Um novo planejamento de férias foi gerado.` };
+        return { message: `Importação concluída! ${funcionariosParaProcessar.length} funcionários processados e ${afastamentosParaCriar.length} afastamentos registrados. Agora, gere o planejamento na seção correspondente.` };
 
     } catch (err) {
         await t.rollback();
-        console.error("[ERRO FATAL SERVICE] A transação foi revertida.", err);
+        console.error("[ERRO FATAL SERVICE] A transação de importação foi revertida.", err);
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
         throw new Error(err.message || "Ocorreu um erro crítico durante a importação.");
     }

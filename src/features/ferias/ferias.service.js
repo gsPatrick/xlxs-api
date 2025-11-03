@@ -162,9 +162,10 @@ async function tentarAlocarFerias(dataAtual, dataLimite, diasDeFerias, funcionar
 }
 
 
+
 async function distribuirFerias(ano, descricao, options = {}) {
     const { transaction, dataInicioDist, dataFimDist } = options;
-    console.log(`[LOG] INICIANDO DISTRIBUIÇÃO OTIMIZADA (V5) PARA O ANO: ${ano}.`);
+    console.log(`[LOG] EXECUTANDO DISTRIBUIÇÃO INDEPENDENTE (V-FINAL) PARA ANO: ${ano}.`);
     
     const t = transaction || await sequelize.transaction();
     const transactionOptions = { transaction: t };
@@ -178,6 +179,8 @@ async function distribuirFerias(ano, descricao, options = {}) {
 
         const inicioDistribuicao = dataInicioDist ? startOfDay(parseISO(dataInicioDist)) : startOfYear(new Date(ano, 0, 1));
         const fimDistribuicao = dataFimDist ? endOfDay(parseISO(dataFimDist)) : endOfYear(new Date(ano, 11, 31));
+        
+        console.log(`[INFO] Período de distribuição: ${format(inicioDistribuicao, 'dd/MM/yyyy')} a ${format(fimDistribuicao, 'dd/MM/yyyy')}.`);
 
         const afastamentosConflitantes = await Afastamento.findAll({
             attributes: ['matricula_funcionario'],
@@ -187,10 +190,10 @@ async function distribuirFerias(ano, descricao, options = {}) {
                     { [Op.or]: [{ data_fim: { [Op.gte]: inicioDistribuicao } }, { data_fim: { [Op.is]: null } }] }
                 ]
             },
-            raw: true, ...transactionOptions
+            raw: true, transaction: t
         });
         const matriculasParaExcluir = new Set(afastamentosConflitantes.map(af => af.matricula_funcionario));
-        console.log(`[INFO] ${matriculasParaExcluir.size} funcionários serão excluídos devido a afastamentos.`);
+        console.log(`[INFO] ${matriculasParaExcluir.size} funcionários inelegíveis por afastamento.`);
 
         const funcionariosElegiveis = await Funcionario.findAll({
             where: {
@@ -206,7 +209,7 @@ async function distribuirFerias(ano, descricao, options = {}) {
             ...transactionOptions
         });
         
-        console.log(`[LOG] ${funcionariosElegiveis.length} funcionários elegíveis encontrados.`);
+        console.log(`[LOG] ${funcionariosElegiveis.length} funcionários elegíveis serão planejados.`);
         if (funcionariosElegiveis.length === 0 && feriasManuais.length === 0) {
             if (!transaction) await t.commit();
             return { message: `Planejamento para ${ano} criado, mas nenhum funcionário era elegível.` };
@@ -216,7 +219,6 @@ async function distribuirFerias(ano, descricao, options = {}) {
         const feriasParaCriar = [];
         let funcionariosNaoAlocados = 0;
         
-        // Estrutura para controlar a ocupação por mês e município
         const ocupacaoMensal = {};
 
         for (const funcionario of funcionariosElegiveis) {
@@ -232,11 +234,8 @@ async function distribuirFerias(ano, descricao, options = {}) {
             const dataLimiteFuncionario = startOfDay(new Date(funcionarioAtualizado.dth_limite_ferias));
             const municipio = funcionarioAtualizado.municipio_local_trabalho || 'N/A';
             
-            // Loop pelos meses do período de distribuição
             for (let mes = getMonth(inicioDistribuicao); mes <= getMonth(fimDistribuicao); mes++) {
                 let diaDeBusca = startOfDay(new Date(ano, mes, 1));
-
-                // Garante que a busca comece no início do período de distribuição
                 if (mes === getMonth(inicioDistribuicao) && diaDeBusca < inicioDistribuicao) {
                     diaDeBusca = inicioDistribuicao;
                 }
@@ -246,9 +245,8 @@ async function distribuirFerias(ano, descricao, options = {}) {
 
                     if (dataFimFerias < dataLimiteFuncionario && isDataValidaInicio(format(diaDeBusca, 'yyyy-MM-dd'), funcionarioAtualizado, feriadosDoAno)) {
                         
-                        // Verifica se já há muitas pessoas naquele município e mês
                         const chaveOcupacao = `${municipio}-${mes}`;
-                        const limiteAlocacao = Math.ceil(funcionariosElegiveis.length / 11); // Distribui em 11 meses para ter folga
+                        const limiteAlocacao = Math.ceil(funcionariosElegiveis.length / 11) + 5; // Adiciona uma pequena folga
                         
                         if ((ocupacaoMensal[chaveOcupacao] || 0) < limiteAlocacao) {
                             feriasParaCriar.push({
@@ -281,7 +279,8 @@ async function distribuirFerias(ano, descricao, options = {}) {
         if (feriasParaCriar.length > 0) await Ferias.bulkCreate(feriasParaCriar, transactionOptions);
         if (feriasManuais.length > 0) await Ferias.update({ planejamentoId: novoPlanejamento.id }, { where: { id: { [Op.in]: feriasManuais.map(f => f.id) } }, ...transactionOptions });
         if (!transaction) await t.commit();
-        return { message: `Distribuição concluída. ${feriasParaCriar.length} períodos planejados.`, registrosCriados: feriasParaCriar.length };
+        console.log(`[LOG] DISTRIBUIÇÃO CONCLUÍDA. ${feriasParaCriar.length} períodos planejados.`);
+        return { message: `Distribuição para ${ano} concluída. ${feriasParaCriar.length} períodos planejados.`, registrosCriados: feriasParaCriar.length };
 
     } catch(error) {
         if (!transaction) await t.rollback();
