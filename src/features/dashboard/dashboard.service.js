@@ -1,6 +1,6 @@
 // src/features/dashboard/dashboard.service.js
 const { Funcionario, Planejamento, Ferias } = require('../../models');
-const { Op, fn, col, literal } = require('sequelize');
+const { Op, fn, col } = require('sequelize');
 const { addDays } = require('date-fns');
 
 const getSummaryData = async (queryParams) => {
@@ -8,30 +8,23 @@ const getSummaryData = async (queryParams) => {
     const { year, ...filters } = queryParams;
 
     // ==========================================================
-    // INÍCIO DA CORREÇÃO APLICADA
+    // LÓGICA DE FILTRAGEM ROBUSTA E CORRIGIDA
     // ==========================================================
     const whereClauseFuncionario = { status: 'Ativo' };
 
-    // Processa os filtros recebidos, tratando o caso especial do array de categorias
     for (const key in filters) {
         const value = filters[key];
-
-        // Ignora valores nulos, vazios ou indefinidos
         if (value !== null && value !== undefined && value !== '' && value.length > 0) {
-            
             // Tratamento especial para o array de categorias que chega como 'categoria[]'
             if (key === 'categoria[]' && Array.isArray(value)) {
                 whereClauseFuncionario.categoria = { [Op.in]: value };
-            
+            } 
             // Tratamento para todos os outros filtros de texto (ignorando 'year')
-            } else if (key !== 'year' && typeof value === 'string') {
+            else if (key !== 'year' && typeof value === 'string') {
                 whereClauseFuncionario[key] = { [Op.iLike]: `%${value}%` };
             }
         }
     }
-    // ==========================================================
-    // FIM DA CORREÇÃO APLICADA
-    // ==========================================================
 
     // 2. SELECIONAR O PLANEJAMENTO
     let planejamentoSelecionado = null;
@@ -41,11 +34,7 @@ const getSummaryData = async (queryParams) => {
                                await Planejamento.findOne({ where: { status: 'arquivado', ano: anoNumero }, order: [['criado_em', 'DESC']] });
     } else {
         planejamentoSelecionado = await Planejamento.findOne({
-            order: [
-                ['ano', 'DESC'],
-                ['status', 'ASC'],
-                ['criado_em', 'DESC']
-            ]
+            order: [ ['ano', 'DESC'], ['status', 'ASC'], ['criado_em', 'DESC'] ]
         });
     }
     const anoDoPlanejamento = planejamentoSelecionado?.ano || parseInt(year, 10) || new Date().getFullYear();
@@ -92,22 +81,36 @@ const getSummaryData = async (queryParams) => {
         planejamentoSelecionado ? Ferias.findAll({ where: { planejamentoId: planejamentoSelecionado.id, status: { [Op.in]: ['Planejada', 'Confirmada'] }, data_inicio: { [Op.gte]: hoje }, necessidade_substituicao: true, observacao: { [Op.iLike]: '%Pendente de alocação%' } }, include: [{ model: Funcionario, where: whereClauseFuncionario, required: true, attributes: ['matricula', 'nome_funcionario'] }] }) : Promise.resolve([])
     ]);
 
+    // ==========================================================
+    // SEÇÃO DO GRÁFICO ATUALIZADA PARA INTERATIVIDADE
+    // ==========================================================
     let distribuicaoMensal = [];
+    const mesesDoAno = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+    distribuicaoMensal = mesesDoAno.map(nomeMes => ({ mes: nomeMes, total: 0, funcionarios: [] }));
+
     if (planejamentoSelecionado) {
         const feriasDoAno = await Ferias.findAll({
             where: { planejamentoId: planejamentoSelecionado.id },
-            include: [{ model: Funcionario, where: whereClauseFuncionario, attributes: [], required: true }],
-            attributes: [
-                [fn('to_char', col('data_inicio'), 'MM'), 'mes'],
-                [fn('COUNT', col('Ferias.id')), 'total']
-            ],
-            group: ['mes'], raw: true
+            include: [{ 
+                model: Funcionario, 
+                where: whereClauseFuncionario, 
+                attributes: ['matricula', 'nome_funcionario'], 
+                required: true 
+            }],
+            attributes: ['data_inicio'],
+            raw: true,
+            nest: true
         });
-        const mesesDoAno = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
-        distribuicaoMensal = mesesDoAno.map((nomeMes, index) => {
-            const mesNumero = String(index + 1).padStart(2, '0');
-            const mesData = feriasDoAno.find(item => item.mes === mesNumero);
-            return { mes: nomeMes, total: mesData ? parseInt(mesData.total, 10) : 0 };
+
+        feriasDoAno.forEach(feria => {
+            const mesIndex = new Date(feria.data_inicio).getUTCMonth(); // 0-11
+            if (mesIndex >= 0 && mesIndex < 12) {
+                distribuicaoMensal[mesIndex].total++;
+                distribuicaoMensal[mesIndex].funcionarios.push({
+                    matricula: feria.Funcionario.matricula,
+                    nome_funcionario: feria.Funcionario.nome_funcionario
+                });
+            }
         });
     }
 
