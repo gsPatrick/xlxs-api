@@ -185,28 +185,34 @@ async function distribuirFerias(ano, descricao, options = {}) {
         const fimDistribuicao = dataFimDist ? endOfDay(parseISO(dataFimDist)) : fimDoAno;
         console.log(`[INFO] Período de distribuição: ${format(inicioDistribuicao, 'dd/MM/yyyy')} a ${format(fimDistribuicao, 'dd/MM/yyyy')}.`);
 
-        // PASSO 1: QUERY DE EXCLUSÃO DE AFASTADOS MAIS EXPLÍCITA
+        // ==========================================================================================
+        // CORREÇÃO: LÓGICA PARA IDENTIFICAR E EXCLUIR FUNCIONÁRIOS AFASTADOS
+        // 1. Buscamos todos os afastamentos cujo período se sobrepõe ao período do planejamento.
+        // ==========================================================================================
         const afastamentosConflitantes = await Afastamento.findAll({
             attributes: ['matricula_funcionario'],
             where: {
-                data_inicio: { [Op.lte]: fimDistribuicao },
+                data_inicio: { [Op.lte]: fimDistribuicao }, // O afastamento começou ANTES do fim do período de planejamento
                 [Op.or]: [
-                    { data_fim: { [Op.gte]: inicioDistribuicao } },
-                    { data_fim: { [Op.is]: null } }
+                    { data_fim: { [Op.gte]: inicioDistribuicao } }, // E termina DEPOIS do início do período de planejamento
+                    { data_fim: { [Op.is]: null } }                 // Ou o afastamento ainda está em aberto (sem data de fim)
                 ]
             },
             raw: true, transaction: t
         });
         const matriculasParaExcluir = new Set(afastamentosConflitantes.map(af => af.matricula_funcionario));
-        console.log(`[INFO] ${matriculasParaExcluir.size} funcionários inelegíveis por afastamento.`);
+        console.log(`[INFO] ${matriculasParaExcluir.size} funcionários foram identificados como inelegíveis devido a afastamentos no período.`);
 
-        // PASSO 2: Buscar funcionários elegíveis
+
+        // ==========================================================================================
+        // 2. Modificamos a busca de funcionários para usar a lista de exclusão gerada acima.
+        // ==========================================================================================
         const funcionariosElegiveis = await Funcionario.findAll({
             where: {
                 status: 'Ativo',
                 matricula: { 
                     [Op.notIn]: Array.from(matriculasManuais),
-                    [Op.notIn]: Array.from(matriculasParaExcluir)
+                    [Op.notIn]: Array.from(matriculasParaExcluir) // <- ALTERAÇÃO PRINCIPAL AQUI
                 }
             },
             include: [{ model: Ferias, as: 'historicoFerias', required: false }],
@@ -239,10 +245,11 @@ async function distribuirFerias(ano, descricao, options = {}) {
             let dataInicioEncontrada = false;
             const dataLimiteFuncionario = startOfDay(new Date(funcionarioAtualizado.dth_limite_ferias));
             
-            // PASSO 3: GARANTIR QUE A BUSCA COMECE DENTRO DO ANO DO PLANEJAMENTO
-            let diaDeBusca = inicioDistribuicao > new Date() ? inicioDistribuicao : new Date(); // Começa a busca a partir de hoje ou do início da distribuição
+            // Garante que a busca comece a partir de hoje ou do início da distribuição
+            let diaDeBusca = inicioDistribuicao > new Date() ? inicioDistribuicao : new Date();
+            // Força o início da busca para o ano do planejamento se a data atual for anterior
             if (getYear(diaDeBusca) < ano) {
-                diaDeBusca = inicioDoAno; // Força o início da busca para o ano do planejamento se a data atual for anterior
+                diaDeBusca = inicioDoAno;
             }
 
             while (diaDeBusca < dataLimiteFuncionario && diaDeBusca < fimDistribuicao) {
