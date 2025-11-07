@@ -113,26 +113,34 @@ const importFromXLSX = async (filePath, options = {}) => {
             else if (faltas >= 24 && faltas <= 32) funcionarioMapeado.saldo_dias_ferias = 12;
             else funcionarioMapeado.saldo_dias_ferias = 0;
 
+            // =================================================================================
+            // LÓGICA DE DETECÇÃO DE AFASTAMENTO CORRIGIDA E MAIS FLEXÍVEL
+            // =================================================================================
             const situacao = funcionarioMapeado.situacao_ferias_afastamento_hoje;
-            if (situacao && (situacao.toLowerCase().includes('afastamento') || situacao.toLowerCase().includes('aposentadoria'))) {
-                const regex = /(\d{2}\/\d{2}\/\d{4})\s*a\s*(\d{2}\/\d{2}\/\d{4})/;
+            // 1. Verifica se o campo 'situacao' não está vazio
+            if (situacao) {
+                // 2. A expressão regular agora busca o padrão "data a data" de forma mais flexível (ignora maiúsculas/minúsculas no "a")
+                //    e não depende mais de palavras-chave como "afastamento".
+                const regex = /(\d{2}\/\d{2}\/\d{4})\s+a\s+(\d{2}\/\d{2}\/\d{4})/i; // Adicionado 'i' para case-insensitive
                 const match = situacao.match(regex);
+                
+                // 3. Se o padrão for encontrado, independentemente do resto do texto...
                 if (match && match[1] && match[2]) {
                     const dataInicio = parse(match[1], 'dd/MM/yyyy', new Date());
                     const dataFim = parse(match[2], 'dd/MM/yyyy', new Date());
                     
                     if (isValid(dataInicio) && isValid(dataFim)) {
-                        console.log(`[INFO] Afastamento detectado para Matrícula ${funcionarioMapeado.matricula}: ${match[1]} a ${match[2]}`);
                         afastamentosParaCriar.push({
                             matricula_funcionario: String(funcionarioMapeado.matricula),
-                            motivo: situacao.substring(0, 255),
+                            motivo: situacao.substring(0, 255), // Armazena o texto original como motivo
                             data_inicio: dataInicio,
                             data_fim: dataFim,
-                            impacta_ferias: true
+                            impacta_ferias: true // Assumimos que impacta por padrão
                         });
                     }
                 }
             }
+            // =================================================================================
 
             funcionarioMapeado.status = 'Ativo';
             funcionariosParaProcessar.push(funcionarioMapeado);
@@ -154,6 +162,7 @@ const importFromXLSX = async (filePath, options = {}) => {
         
         if (afastamentosParaCriar.length > 0) {
             const matriculasComAfastamento = [...new Set(afastamentosParaCriar.map(a => a.matricula_funcionario))];
+            // Apaga afastamentos antigos para evitar duplicatas e garantir que a planilha é a fonte da verdade
             await Afastamento.destroy({ where: { matricula_funcionario: { [Op.in]: matriculasComAfastamento } }, transaction: t });
             
             await Afastamento.bulkCreate(afastamentosParaCriar, { transaction: t });
