@@ -164,8 +164,9 @@ async function tentarAlocarFerias(dataAtual, dataLimite, diasDeFerias, funcionar
 
 
 async function distribuirFerias(ano, descricao, options = {}) {
+    // As opções agora chegam corretamente do controller
     const { transaction, dataInicioDist, dataFimDist } = options;
-    console.log(`[LOG] INICIANDO DISTRIBUIÇÃO BLINDADA (V6) PARA O ANO: ${ano}.`);
+    console.log(`[LOG] INICIANDO DISTRIBUIÇÃO CORRIGIDA PARA O ANO: ${ano}.`);
     
     const t = transaction || await sequelize.transaction();
     const transactionOptions = { transaction: t };
@@ -177,42 +178,39 @@ async function distribuirFerias(ano, descricao, options = {}) {
         const feriasManuais = await Ferias.findAll({ where: { ajuste_manual: true, status: { [Op.in]: ['Confirmada', 'Planejada'] } }, ...transactionOptions });
         const matriculasManuais = new Set(feriasManuais.map(f => f.matricula_funcionario));
 
-        // FORÇA O PERÍODO DE DISTRIBUIÇÃO A FICAR ESTRITAMENTE DENTRO DO ANO DO PLANEJAMENTO
-        const inicioDoAno = startOfYear(new Date(ano, 0, 1));
-        const fimDoAno = endOfYear(new Date(ano, 11, 31));
+        // ==========================================================================================
+        // CORREÇÃO 1: Definindo o período de distribuição com base nos parâmetros recebidos
+        // Se as datas não forem fornecidas, ele usará o ano inteiro como padrão.
+        // ==========================================================================================
+        const inicioDistribuicao = dataInicioDist ? startOfDay(parseISO(dataInicioDist)) : startOfYear(new Date(ano, 0, 1));
+        const fimDistribuicao = dataFimDist ? endOfDay(parseISO(dataFimDist)) : endOfYear(new Date(ano, 11, 31));
+        console.log(`[INFO] Período de distribuição DEFINIDO: ${format(inicioDistribuicao, 'dd/MM/yyyy')} a ${format(fimDistribuicao, 'dd/MM/yyyy')}.`);
 
-        const inicioDistribuicao = dataInicioDist ? startOfDay(parseISO(dataInicioDist)) : inicioDoAno;
-        const fimDistribuicao = dataFimDist ? endOfDay(parseISO(dataFimDist)) : fimDoAno;
-        console.log(`[INFO] Período de distribuição: ${format(inicioDistribuicao, 'dd/MM/yyyy')} a ${format(fimDistribuicao, 'dd/MM/yyyy')}.`);
 
         // ==========================================================================================
-        // CORREÇÃO: LÓGICA PARA IDENTIFICAR E EXCLUIR FUNCIONÁRIOS AFASTADOS
-        // 1. Buscamos todos os afastamentos cujo período se sobrepõe ao período do planejamento.
+        // CORREÇÃO 2: Lógica de exclusão de afastados mais robusta.
+        // Pega qualquer funcionário que tenha um afastamento terminando DEPOIS do início da nossa distribuição.
         // ==========================================================================================
         const afastamentosConflitantes = await Afastamento.findAll({
             attributes: ['matricula_funcionario'],
             where: {
-                data_inicio: { [Op.lte]: fimDistribuicao }, // O afastamento começou ANTES do fim do período de planejamento
                 [Op.or]: [
-                    { data_fim: { [Op.gte]: inicioDistribuicao } }, // E termina DEPOIS do início do período de planejamento
-                    { data_fim: { [Op.is]: null } }                 // Ou o afastamento ainda está em aberto (sem data de fim)
+                    { data_fim: { [Op.gte]: inicioDistribuicao } }, // O afastamento termina durante ou depois do nosso período
+                    { data_fim: { [Op.is]: null } }                 // Ou o afastamento ainda está em aberto
                 ]
             },
             raw: true, transaction: t
         });
         const matriculasParaExcluir = new Set(afastamentosConflitantes.map(af => af.matricula_funcionario));
-        console.log(`[INFO] ${matriculasParaExcluir.size} funcionários foram identificados como inelegíveis devido a afastamentos no período.`);
+        console.log(`[INFO] ${matriculasParaExcluir.size} funcionários foram identificados como inelegíveis devido a afastamentos.`);
 
 
-        // ==========================================================================================
-        // 2. Modificamos a busca de funcionários para usar a lista de exclusão gerada acima.
-        // ==========================================================================================
         const funcionariosElegiveis = await Funcionario.findAll({
             where: {
                 status: 'Ativo',
                 matricula: { 
                     [Op.notIn]: Array.from(matriculasManuais),
-                    [Op.notIn]: Array.from(matriculasParaExcluir) // <- ALTERAÇÃO PRINCIPAL AQUI
+                    [Op.notIn]: Array.from(matriculasParaExcluir)
                 }
             },
             include: [{ model: Ferias, as: 'historicoFerias', required: false }],
@@ -229,9 +227,8 @@ async function distribuirFerias(ano, descricao, options = {}) {
         const feriasParaCriar = [];
         let funcionariosNaoAlocados = 0;
         
-        // Estrutura para controle de ocupação
         const ocupacaoMensal = {};
-        const limiteAlocacaoGlobal = Math.ceil(funcionariosElegiveis.length / 11) + 5; // Adiciona uma pequena folga
+        const limiteAlocacaoGlobal = Math.ceil(funcionariosElegiveis.length / 11) + 5;
 
         for (const funcionario of funcionariosElegiveis) {
             const funcionarioAtualizado = await recalcularPeriodoAquisitivo(funcionario.matricula);
@@ -245,13 +242,13 @@ async function distribuirFerias(ano, descricao, options = {}) {
             let dataInicioEncontrada = false;
             const dataLimiteFuncionario = startOfDay(new Date(funcionarioAtualizado.dth_limite_ferias));
             
-            // Garante que a busca comece a partir de hoje ou do início da distribuição
-            let diaDeBusca = inicioDistribuicao > new Date() ? inicioDistribuicao : new Date();
-            // Força o início da busca para o ano do planejamento se a data atual for anterior
-            if (getYear(diaDeBusca) < ano) {
-                diaDeBusca = inicioDoAno;
-            }
+            // ==========================================================================================
+            // CORREÇÃO 3: Simplificação da inicialização da data de busca.
+            // Ela agora SEMPRE começa na data de início da distribuição que definimos acima.
+            // ==========================================================================================
+            let diaDeBusca = new Date(inicioDistribuicao);
 
+            // O loop agora respeita estritamente o período de início e fim da distribuição
             while (diaDeBusca < dataLimiteFuncionario && diaDeBusca < fimDistribuicao) {
                 const dataFimFerias = addDays(diaDeBusca, diasDeFerias - 1);
 
@@ -296,7 +293,6 @@ async function distribuirFerias(ano, descricao, options = {}) {
         throw error;
     }
 }
-
 
 
 /**

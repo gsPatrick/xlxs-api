@@ -12,20 +12,33 @@ const findAllPaginated = async (req, res) => {
     }
 };
 
+// ==========================================================
+// CONTROLLER CORRIGIDO
+// ==========================================================
 const distribuir = async (req, res) => {
     try {
-        const { ano, descricao } = req.body;
-        if (!ano || isNaN(parseInt(ano))) return res.status(400).send({ message: 'O ano é obrigatório.' });
-        const resultado = await feriasService.distribuirFerias(parseInt(ano), descricao);
+        // Agora captura também as datas de início e fim da distribuição
+        const { ano, descricao, data_inicio_distribuicao, data_fim_distribuicao } = req.body;
+        
+        if (!ano || isNaN(parseInt(ano))) {
+            return res.status(400).send({ message: 'O ano é obrigatório.' });
+        }
+
+        // Monta o objeto de opções para passar para o serviço
+        const options = {
+            dataInicioDist: data_inicio_distribuicao,
+            dataFimDist: data_fim_distribuicao
+        };
+
+        // Passa o ano, a descrição e as opções com as datas
+        const resultado = await feriasService.distribuirFerias(parseInt(ano), descricao, options);
+        
         res.status(200).send(resultado);
     } catch (error) {
         res.status(500).send({ message: 'Falha ao distribuir férias.', error: error.message });
     }
 };
 
-// ==========================================================
-// NOVO CONTROLLER
-// ==========================================================
 const redistribuirSelecionadas = async (req, res) => {
     try {
         const resultado = await feriasService.redistribuirFeriasSelecionadas(req.body);
@@ -90,7 +103,7 @@ const bulkUpdateSubstitution = async (req, res) => {
 module.exports = { 
     findAllPaginated,
     distribuir,
-    redistribuirSelecionadas, // Exporta o novo controller
+    redistribuirSelecionadas,
     create,
     update,
     remove,
