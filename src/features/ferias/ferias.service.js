@@ -165,7 +165,7 @@ async function tentarAlocarFerias(dataAtual, dataLimite, diasDeFerias, funcionar
 
 async function distribuirFerias(ano, descricao, options = {}) {
     const { transaction, dataInicioDist, dataFimDist } = options;
-    console.log(`[LOG] INICIANDO DISTRIBUIÇÃO DEFINITIVA PARA O ANO: ${ano}.`);
+    console.log(`[LOG] INICIANDO DISTRIBUIÇÃO BALANCEADA PARA O ANO: ${ano}.`);
     
     const t = transaction || await sequelize.transaction();
     const transactionOptions = { transaction: t };
@@ -177,34 +177,19 @@ async function distribuirFerias(ano, descricao, options = {}) {
         const feriasManuais = await Ferias.findAll({ where: { ajuste_manual: true, status: { [Op.in]: ['Confirmada', 'Planejada'] } }, ...transactionOptions });
         const matriculasManuais = new Set(feriasManuais.map(f => f.matricula_funcionario));
 
-        // ==========================================================================================
-        // ETAPA 1: DEFINIÇÃO ROBUSTA DO PERÍODO DE DISTRIBUIÇÃO
-        // ==========================================================================================
         const hoje = startOfDay(new Date());
-
-        // Prioridade 1: Usa a data de início fornecida pela requisição, se for válida.
-        // Prioridade 2: Se não houver data, usa o início do 'ano' fornecido.
         const inicioDistribuicao = dataInicioDist && isValid(parseISO(dataInicioDist)) 
             ? startOfDay(parseISO(dataInicioDist)) 
             : startOfYear(new Date(ano, 0, 1));
-        
         const fimDistribuicao = dataFimDist && isValid(parseISO(dataFimDist))
             ? endOfDay(parseISO(dataFimDist))
             : endOfYear(new Date(ano, 11, 31));
 
-        // LOGS PARA DEBUG: Isso nos dirá exatamente quais datas o sistema está usando.
-        console.log(`[INFO] Data de início recebida da requisição: ${dataInicioDist}`);
-        console.log(`[INFO] Data de fim recebida da requisição: ${dataFimDist}`);
-        console.log(`[INFO] Período de distribuição FINALMENTE DEFINIDO: ${format(inicioDistribuicao, 'dd/MM/yyyy')} a ${format(fimDistribuicao, 'dd/MM/yyyy')}.`);
+        console.log(`[INFO] Período de distribuição DEFINIDO: ${format(inicioDistribuicao, 'dd/MM/yyyy')} a ${format(fimDistribuicao, 'dd/MM/yyyy')}.`);
 
         const afastamentosConflitantes = await Afastamento.findAll({
             attributes: ['matricula_funcionario'],
-            where: {
-                [Op.or]: [
-                    { data_fim: { [Op.gte]: inicioDistribuicao } },
-                    { data_fim: { [Op.is]: null } }
-                ]
-            },
+            where: { [Op.or]: [ { data_fim: { [Op.gte]: inicioDistribuicao } }, { data_fim: { [Op.is]: null } } ] },
             raw: true, transaction: t
         });
         const matriculasParaExcluir = new Set(afastamentosConflitantes.map(af => af.matricula_funcionario));
@@ -213,10 +198,7 @@ async function distribuirFerias(ano, descricao, options = {}) {
         const funcionariosElegiveis = await Funcionario.findAll({
             where: {
                 status: 'Ativo',
-                matricula: { 
-                    [Op.notIn]: Array.from(matriculasManuais),
-                    [Op.notIn]: Array.from(matriculasParaExcluir)
-                }
+                matricula: { [Op.notIn]: Array.from(matriculasManuais), [Op.notIn]: Array.from(matriculasParaExcluir) }
             },
             include: [{ model: Ferias, as: 'historicoFerias', required: false }],
             order: [['dth_limite_ferias', 'ASC']],
@@ -228,12 +210,20 @@ async function distribuirFerias(ano, descricao, options = {}) {
             if (!transaction) await t.commit(); return { message: `Planejamento para ${ano} criado, mas nenhum funcionário era elegível.` };
         }
 
+        // ==========================================================================================
+        // CORREÇÃO 2: CÁLCULO DE LIMITE MENSAL MAIS INTELIGENTE
+        // Calcula a média por mês e adiciona uma folga de 15% para flexibilidade.
+        // ==========================================================================================
+        const totalElegiveis = funcionariosElegiveis.length;
+        const mediaMensal = Math.ceil(totalElegiveis / 11); // Usamos 11 meses para o cálculo base
+        const limiteMensal = Math.ceil(mediaMensal * 1.15); // Adiciona folga de 15%
+        console.log(`[INFO] Limite de alocação por mês foi definido para aproximadamente ${limiteMensal} funcionários.`);
+
+
         const feriadosDoAno = await getFeriadosNacionais(ano);
         const feriasParaCriar = [];
         let funcionariosNaoAlocados = 0;
-        
         const ocupacaoMensal = {};
-        const limiteAlocacaoGlobal = Math.ceil(funcionariosElegiveis.length / 11) + 5;
 
         for (const funcionario of funcionariosElegiveis) {
             const funcionarioAtualizado = await recalcularPeriodoAquisitivo(funcionario.matricula);
@@ -246,25 +236,21 @@ async function distribuirFerias(ano, descricao, options = {}) {
 
             let dataInicioEncontrada = false;
             const dataLimiteFuncionario = startOfDay(new Date(funcionarioAtualizado.dth_limite_ferias));
-            
-            // ==========================================================================================
-            // CORREÇÃO DEFINITIVA: LÓGICA DE INÍCIO DA BUSCA
-            // A busca SEMPRE começará na data de início da distribuição (ex: 01/01/2026).
-            // E NUNCA começará antes de hoje, para não agendar no passado.
-            // Math.max garante que pegaremos a data mais recente entre "hoje" e o "início da distribuição".
-            // ==========================================================================================
             const dataDePartida = new Date(Math.max(hoje, inicioDistribuicao));
             let diaDeBusca = dataDePartida;
 
-            // O loop agora respeita estritamente o período de início e fim da distribuição
             while (diaDeBusca < dataLimiteFuncionario && diaDeBusca < fimDistribuicao) {
-                const dataFimFerias = addDays(diaDeBusca, diasDeFerias - 1);
+                const mes = getMonth(diaDeBusca); // Mês como número (0-11)
+                
+                // ==========================================================================================
+                // CORREÇÃO 1: CHAVE DE OCUPAÇÃO BASEADA APENAS NO MÊS
+                // Removemos o município da chave para criar um limite GLOBAL por mês.
+                // ==========================================================================================
+                const chaveOcupacao = String(mes);
 
-                if (isDataValidaInicio(format(diaDeBusca, 'yyyy-MM-dd'), funcionarioAtualizado, feriadosDoAno)) {
-                    const mes = getMonth(diaDeBusca);
-                    const chaveOcupacao = `${funcionario.municipio_local_trabalho || 'N/A'}-${mes}`;
-                    
-                    if ((ocupacaoMensal[chaveOcupacao] || 0) < limiteAlocacaoGlobal) {
+                if ((ocupacaoMensal[chaveOcupacao] || 0) < limiteMensal) {
+                     if (isDataValidaInicio(format(diaDeBusca, 'yyyy-MM-dd'), funcionarioAtualizado, feriadosDoAno)) {
+                        const dataFimFerias = addDays(diaDeBusca, diasDeFerias - 1);
                         feriasParaCriar.push({
                             matricula_funcionario: funcionarioAtualizado.matricula, planejamentoId: novoPlanejamento.id,
                             data_inicio: format(diaDeBusca, 'yyyy-MM-dd'), data_fim: format(dataFimFerias, 'yyyy-MM-dd'),
@@ -277,7 +263,7 @@ async function distribuirFerias(ano, descricao, options = {}) {
                         
                         ocupacaoMensal[chaveOcupacao] = (ocupacaoMensal[chaveOcupacao] || 0) + 1;
                         dataInicioEncontrada = true;
-                        break;
+                        break; // Sai do while e vai para o próximo funcionário
                     }
                 }
                 diaDeBusca = addDays(diaDeBusca, 1);
